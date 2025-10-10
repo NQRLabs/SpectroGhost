@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SpectroGhost</title>
+  <meta name="description" content="A high resolution, zoomable spectrogram viewer. Runs fully in-browser." />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <style>
+    :root{ --gg-bg:#0c1020; --gg-card:#121735; --gg-ink:#eef1ff; --gg-ink-dim:#b9c6ef; --gg-accent:#7cc9ff; --gg-outline:#86a6ff; --gg-border:#2b3868; }
+    html,body{height:100%}
+    body{ background:var(--gg-bg); color:var(--gg-ink); -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+    body::before{ content:""; position:fixed; inset:0; z-index:-1; pointer-events:none; background:
+        radial-gradient(1200px 600px at 12% -10%, #273056 0%, rgba(23,26,38,0) 60%),
+        radial-gradient(1200px 600px at 88% 110%, #1f2648 0%, rgba(23,26,38,0) 55%);
+      background-repeat:no-repeat; background-attachment:fixed; }
+    .gg-card{ background:linear-gradient(180deg,#151c3b,#13183a); border:1px solid var(--gg-border); border-radius:14px; box-shadow:0 10px 30px rgba(0,0,0,.35); }
+    .gg-border{ border-color:var(--gg-border)!important; }
+    .gg-badge{ background:#1a2147; color:#a6b6f0; border:1px solid var(--gg-border); }
+    .text-dim{ color:var(--gg-ink-dim) }
+    .spec-wrap{ position:relative; overflow:auto; border:1px solid var(--gg-border); border-radius:12px; background:#0f1432; }
+    .spec-inner{ position:relative; height:100%; }
+    canvas{ image-rendering:pixelated; }
+    .ruler{ position:sticky; left:0; z-index:3; background:#10183c; border-right:1px solid var(--gg-border); }
+    #timeRuler{ top:0; height:28px; }
+    #freqRuler{ top:28px; width:70px; }
+    .status{ font-variant-numeric:tabular-nums; }
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-expand-md bg-body-tertiary sticky-top border-bottom border-dark-subtle">
+    <div class="container-lg">
+      <a class="navbar-brand fw-bold" href="#">SpectroGhost</a>
+      <span class="navbar-text small text-secondary ms-1">Spectrogram Viewer</span>
+    </div>
+  </nav>
+
+  <main class="container-lg my-4">
+    <section class="gg-card p-3 mb-3" aria-labelledby="ctlTitle">
+      <div class="d-flex align-items-center gap-2 pb-2 border-bottom gg-border">
+        <span class="badge rounded-pill gg-badge" id="ctlTitle">Open audio & settings</span>
+        <div class="ms-auto small text-dim status" id="status">Idle</div>
+      </div>
+      <div class="row g-3 pt-3 align-items-end">
+        <div class="col-12 col-md-5">
+          <label class="form-label small text-secondary" for="fileIn">Audio file (mp3, wav, m4a, ogg…)</label>
+          <input type="file" id="fileIn" class="form-control" accept="audio/*" />
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label small text-secondary" for="fftSize">FFT size</label>
+          <select id="fftSize" class="form-select">
+            <option>1024</option><option>2048</option><option selected>4096</option><option>8192</option><option>16384</option>
+          </select>
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label small text-secondary" for="hopPct">Hop (%)</label>
+          <input type="number" id="hopPct" class="form-control" value="25" min="1" max="90" />
+        </div>
+        <div class="col-6 col-md-1">
+          <label class="form-label small text-secondary" for="pxH">Height (px)</label>
+          <input type="number" id="pxH" class="form-control" value="480" min="200" max="4000" />
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label small text-secondary" for="pxPerSec">Px / sec</label>
+          <input type="number" id="pxPerSec" class="form-control" value="300" min="50" max="4000" />
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label small text-secondary" for="minHz">Min freq (Hz)</label>
+          <input type="number" id="minHz" class="form-control" value="0" min="0" />
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label small text-secondary" for="maxHz">Max freq (Hz)</label>
+          <input type="number" id="maxHz" class="form-control" value="0" min="0" />
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label small text-secondary" for="scale">Scale</label>
+          <select id="scale" class="form-select"><option value="linear" selected>Linear</option><option value="log">Log</option></select>
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label small text-secondary" for="dynRange">Dynamic range (dB)</label>
+          <input type="number" id="dynRange" class="form-control" value="80" min="20" max="140" />
+        </div>
+        <div class="col-12 col-md-4 d-grid d-md-flex gap-2">
+          <button id="btnRender" class="btn btn-primary">Render spectrogram</button>
+          <button id="btnDownload" class="btn btn-outline-light" disabled>Export PNG</button>
+        </div>
+      </div>
+      <div class="row g-2 mt-2 small text-dim">
+        <div class="col-12">Mouse wheel = horizontal zoom · Shift + wheel = vertical zoom · Drag to pan · Click on ruler to jump · Double‑click to reset zoom</div>
+      </div>
+    </section>
+
+    <section class="gg-card p-3">
+      <div class="d-flex align-items-center gap-2 pb-2 border-bottom gg-border">
+        <span class="badge rounded-pill gg-badge">Spectrogram</span>
+        <div class="ms-auto small text-dim status" id="cursor">00:00.000 · 0 Hz</div>
+      </div>
+      <div class="pt-3">
+        <div id="specWrap" class="spec-wrap" style="height: 520px;">
+          <div id="specInner" class="spec-inner">
+            <canvas id="timeRuler" class="ruler" height="28"></canvas>
+            <canvas id="freqRuler" class="ruler" width="70"></canvas>
+            <canvas id="specCanvas"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+  "use strict";
+  // ---------- Utilities ----------
+  const fmtTime = s => {
+    const ms = Math.round((s%1)*1000).toString().padStart(3,'0');
+    const m = Math.floor(s/60); const sec = Math.floor(s%60).toString().padStart(2,'0');
+    return `${m}:${sec}.${ms}`;
+  };
+  function hann(N){ const w=new Float32Array(N); for(let n=0;n<N;n++){ w[n]=0.5*(1-Math.cos(2*Math.PI*n/(N-1))); } return w; }
+  function FFT(N, re, im){ let i=0, j=0; for(i=0;i<N;i++){ if(j>i){ [re[i],re[j]]=[re[j],re[i]]; [im[i],im[j]]=[im[j],im[i]]; } let m = N>>1; while(m>=1 && j>=m){ j-=m; m>>=1; } j+=m; } for(let len=2; len<=N; len<<=1){ const ang=-2*Math.PI/len; const wlenr=Math.cos(ang), wleni=Math.sin(ang); for(let i=0;i<N;i+=len){ let wr=1, wi=0; for(let k=0;k<len/2;k++){ const u_r=re[i+k], u_i=im[i+k]; const v_r=re[i+k+len/2]*wr - im[i+k+len/2]*wi; const v_i=re[i+k+len/2]*wi + im[i+k+len/2]*wr; re[i+k]=u_r+v_r; im[i+k]=u_i+v_i; re[i+k+len/2]=u_r-v_r; im[i+k+len/2]=u_i-v_i; const nwr=wr*wlenr - wi*wleni; wi=wr*wleni + wi*wlenr; wr=nwr; } } } }
+  function makeLUT(){ const lut=new Uint8ClampedArray(256*4); for(let i=0;i<256;i++){ const t=i/255; let r,g,b; if(t<0.25){ const u=t/0.25; r=40*u; g=20*u; b=60+120*u; } else if(t<0.5){ const u=(t-0.25)/0.25; r=40+160*u; g=20*(1-u); b=180-40*u; } else if(t<0.75){ const u=(t-0.5)/0.25; r=200+40*u; g=20+150*u; b=140*(1-u); } else { const u=(t-0.75)/0.25; r=240+15*u; g=170+85*u; b=0+40*u; } lut[i*4+0]=Math.max(0,Math.min(255,Math.round(r))); lut[i*4+1]=Math.max(0,Math.min(255,Math.round(g))); lut[i*4+2]=Math.max(0,Math.min(255,Math.round(b))); lut[i*4+3]=255; } return lut; }
+  const LUT = makeLUT();
+
+  // Always return a promise with an ImageBitmap
+  async function imageBitmapFrom(off, img, w, h){
+    if (off && typeof off.transferToImageBitmap === 'function'){
+      return Promise.resolve(off.transferToImageBitmap());
+    }
+    const c = (off && off.getContext) ? off : document.createElement('canvas');
+    c.width = w; c.height = h; c.getContext('2d').putImageData(img,0,0);
+    return await createImageBitmap(c);
+  }
+
+  // ---------- App State ----------
+  const els = {
+    fileIn: document.getElementById('fileIn'), fftSize: document.getElementById('fftSize'), hopPct: document.getElementById('hopPct'),
+    pxH: document.getElementById('pxH'), pxPerSec: document.getElementById('pxPerSec'), minHz: document.getElementById('minHz'), maxHz: document.getElementById('maxHz'),
+    scale: document.getElementById('scale'), dynRange: document.getElementById('dynRange'), btnRender: document.getElementById('btnRender'), btnDownload: document.getElementById('btnDownload'),
+    status: document.getElementById('status'), cursor: document.getElementById('cursor'),
+    wrap: document.getElementById('specWrap'), inner: document.getElementById('specInner'),
+    cSpec: document.getElementById('specCanvas'), cTime: document.getElementById('timeRuler'), cFreq: document.getElementById('freqRuler')
+  };
+  const ctxSpec = els.cSpec.getContext('2d');
+  const ctxTime = els.cTime.getContext('2d');
+  const ctxFreq = els.cFreq.getContext('2d');
+
+  let audioCtx; let decoded; let meta={ sampleRate:0, duration:0, nyquist:0};
+  let offscreen; let zoomX=1, zoomY=1;
+
+  // ---------- Decode ----------
+  async function decode(file){
+    els.status.textContent = `Decoding ${file.name}…`;
+    if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    const buf = await file.arrayBuffer();
+    decoded = await audioCtx.decodeAudioData(buf);
+    meta.sampleRate = decoded.sampleRate; meta.duration = decoded.duration; meta.nyquist = decoded.sampleRate/2;
+    els.status.textContent = `Loaded ${file.name} · ${fmtTime(meta.duration)} · ${Math.round(meta.sampleRate)} Hz`;
+    if(Number(els.maxHz.value)<=0){ els.maxHz.value = Math.floor(meta.nyquist); }
+  }
+
+  els.fileIn.addEventListener('change', async ()=>{
+    const f = els.fileIn.files && els.fileIn.files[0];
+    if(f){ offscreen=null; await decode(f); render(); }
+  });
+
+  // ---------- STFT rendering ----------
+  function computeSpectrogram(){
+    if(!decoded) return null;
+    const N = Number(els.fftSize.value);
+    const hop = Math.max(1, Math.round(N * (Number(els.hopPct.value)/100)));
+    const ch = decoded.getChannelData(0);
+    const window = hann(N);
+    const frames = Math.max(1, 1 + Math.floor((ch.length - N) / hop));
+    const bins = Math.floor(N/2)+1;
+    const mag = new Float32Array(frames*bins);
+    const re = new Float32Array(N); const im = new Float32Array(N);
+    for(let f=0, pos=0; f<frames; f++, pos+=hop){
+      for(let i=0;i<N;i++){ re[i] = (ch[pos+i]||0) * window[i]; im[i]=0; }
+      FFT(N, re, im);
+      for(let k=0;k<bins;k++){ const rr=re[k], ii=im[k]; mag[f*bins+k] = Math.hypot(rr,ii)/N; }
+    }
+    return { mag, frames, bins, N, hop };
+  }
+
+  async function render(){
+    if(!decoded){ els.status.textContent = 'Load an audio file to begin.'; return; }
+    els.status.textContent = 'Computing spectrogram…';
+    const res = computeSpectrogram();
+    if(!res){ els.status.textContent = 'Unable to compute.'; return; }
+    const { mag, frames, bins } = res;
+    const dyn = Number(els.dynRange.value);
+    let maxVal = 0; for(let i=0;i<mag.length;i++){ if(mag[i]>maxVal) maxVal=mag[i]; }
+    const toDB = x => 20*Math.log10((x+1e-12)/maxVal);
+    const minHz = Math.max(0, Number(els.minHz.value)||0);
+    const maxHz = Math.min(meta.nyquist, Number(els.maxHz.value)||meta.nyquist);
+    const minBin = 0 | Math.max(0, Math.floor(minHz / meta.nyquist * (bins-1)));
+    const maxBin = 0 | Math.min(bins-1, Math.ceil(maxHz / meta.nyquist * (bins-1)));
+    const usedBins = Math.max(1, maxBin - minBin + 1);
+
+    const offW = frames; const offH = usedBins;
+    const off = (typeof OffscreenCanvas !== 'undefined') ? new OffscreenCanvas(offW, offH) : (function(){ const c=document.createElement('canvas'); c.width=offW; c.height=offH; return c; })();
+    const octx = off.getContext('2d', { willReadFrequently: true });
+    const img = octx.createImageData(offW, offH);
+    const data = img.data;
+    const scale = els.scale.value;
+    const binToY = k => scale==='linear'
+      ? (usedBins-1 - (k - minBin))
+      : (usedBins-1 - Math.floor((Math.log10((k+1)) - Math.log10(Math.max(1,minBin+1))) / (Math.log10(maxBin+1) - Math.log10(Math.max(1,minBin+1))) * (usedBins-1)));
+    const rowForBin = new Int32Array(usedBins);
+    for(let k=minBin, j=0; k<=maxBin; k++, j++) rowForBin[j] = binToY(k);
+
+    for(let f=0; f<frames; f++){
+      for(let j=0;j<usedBins;j++){
+        const k = minBin + j; const db = toDB(mag[f*bins + k]);
+        const v = Math.max(0, Math.min(255, Math.round(255 * (1 - Math.min(dyn, Math.max(0, -db)) / dyn))));
+        const y = rowForBin[j]; const idx = (y*offW + f) * 4;
+        data[idx+0]=LUT[v*4+0]; data[idx+1]=LUT[v*4+1]; data[idx+2]=LUT[v*4+2]; data[idx+3]=255;
+      }
+    }
+    octx.putImageData(img,0,0);
+
+    const bmp = await imageBitmapFrom(off, img, offW, offH);
+    offscreen = { bmp, w: offW, h: offH, usedBins, frames };
+    layout();
+    els.status.textContent = `Rendered ${frames} frames × ${usedBins} bins`;
+    els.btnDownload.disabled = false;
+  }
+
+  // ---------- Layout & drawing ----------
+  function layout(){
+    if(!offscreen) return;
+    const pxH = Number(els.pxH.value);
+    const pxPerSec = Number(els.pxPerSec.value);
+    const width = Math.ceil(meta.duration * pxPerSec);
+    const innerW = width + 70; // freq ruler
+    const innerH = pxH + 28;   // time ruler
+    els.inner.style.width = innerW + 'px';
+    els.inner.style.height = innerH + 'px';
+    els.cTime.width = width; els.cTime.height = 28; els.cTime.style.left = '70px'; els.cTime.style.top='0px';
+    els.cFreq.width = 70; els.cFreq.height = pxH; els.cFreq.style.left='0px'; els.cFreq.style.top = '28px';
+    els.cSpec.width = width; els.cSpec.height = pxH; els.cSpec.style.position='absolute'; els.cSpec.style.left = '70px'; els.cSpec.style.top = '28px';
+    drawSpectrogram(); drawRulers();
+  }
+
+  function drawSpectrogram(){
+    if(!offscreen) return;
+    const { bmp, w, h } = offscreen;
+    ctxSpec.clearRect(0,0,els.cSpec.width, els.cSpec.height);
+    ctxSpec.drawImage(bmp, 0,0,w,h, 0,0, els.cSpec.width, els.cSpec.height);
+  }
+  function drawRulers(){
+    const w = els.cTime.width, h=els.cTime.height; ctxTime.clearRect(0,0,w,h);
+    ctxTime.fillStyle='#10183c'; ctxTime.fillRect(0,0,w,h);
+    ctxTime.strokeStyle='#2b3868'; ctxTime.beginPath(); ctxTime.moveTo(0,h-0.5); ctxTime.lineTo(w,h-0.5); ctxTime.stroke();
+    ctxTime.fillStyle='#a6b6f0'; ctxTime.font='12px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial'; ctxTime.textAlign='center'; ctxTime.textBaseline='middle';
+    const pxPerSec = Number(els.pxPerSec.value);
+    const major = pxPerSec; const minor = pxPerSec/5;
+    for(let x=0;x<=w;x+=minor){ const isMajor = (Math.abs(x%major)<1); ctxTime.globalAlpha = isMajor?1:0.5; ctxTime.fillRect(x, h- (isMajor?16:10), 1, (isMajor?16:10)); if(isMajor){ ctxTime.fillText(fmtTime(x/pxPerSec), x, 9); }}
+
+    const fh = els.cFreq.height; const fw = els.cFreq.width; ctxFreq.clearRect(0,0,fw,fh);
+    ctxFreq.fillStyle='#10183c'; ctxFreq.fillRect(0,0,fw,fh);
+    ctxFreq.strokeStyle='#2b3868'; ctxFreq.beginPath(); ctxFreq.moveTo(fw-0.5,0); ctxFreq.lineTo(fw-0.5,fh); ctxFreq.stroke();
+    ctxFreq.fillStyle='#a6b6f0'; ctxFreq.font='12px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial'; ctxFreq.textAlign='right'; ctxFreq.textBaseline='middle';
+    const minHz = Number(els.minHz.value)||0; const maxHz = Number(els.maxHz.value)||meta.nyquist; const marks = 8;
+    for(let i=0;i<=marks;i++){
+      const frac = i/marks;
+      const hz = els.scale.value==='linear' ? (minHz + (maxHz-minHz)*frac) : Math.pow(10, Math.log10(minHz||1) + frac*(Math.log10(maxHz)-Math.log10(Math.max(1,minHz))));
+      const y = fh - Math.round(frac*fh);
+      ctxFreq.globalAlpha=1; ctxFreq.fillRect(fw-8, y, 8, 1);
+      ctxFreq.globalAlpha=.9; ctxFreq.fillText(Math.round(hz).toLocaleString()+" Hz", fw-10, Math.min(fh-10, Math.max(10, y)));
+    }
+  }
+
+  // ---------- Interactions ----------
+  function applyZoom(){ if(!offscreen) return; const baseW = Math.ceil(meta.duration * Number(els.pxPerSec.value)); const baseH = Number(els.pxH.value); const newW = Math.max(200, Math.round(baseW * zoomX)); const newH = Math.max(200, Math.round(baseH * zoomY)); els.cTime.width = newW; els.cSpec.width = newW; els.cFreq.height = newH; els.cSpec.height = newH; drawSpectrogram(); drawRulers(); }
+  els.wrap.addEventListener('wheel', (e)=>{ if(!offscreen) return; const delta = Math.sign(e.deltaY) * 0.1; if(e.shiftKey){ zoomY = Math.max(0.25, Math.min(8, zoomY * (1 - delta))); } else { zoomX = Math.max(0.25, Math.min(16, zoomX * (1 - delta))); } applyZoom(); e.preventDefault(); }, { passive:false });
+  let drag=false, sx=0, sy=0, scrollL=0, scrollT=0;
+  els.wrap.addEventListener('mousedown', (e)=>{ drag=true; sx=e.clientX; sy=e.clientY; scrollL=els.wrap.scrollLeft; scrollT=els.wrap.scrollTop; });
+  window.addEventListener('mouseup', ()=> drag=false);
+  window.addEventListener('mousemove', (e)=>{ if(!drag) return; els.wrap.scrollLeft = scrollL - (e.clientX - sx); els.wrap.scrollTop = scrollT - (e.clientY - sy); });
+  els.wrap.addEventListener('mousemove', (e)=>{ if(!offscreen) return; const rect = els.cSpec.getBoundingClientRect(); const x = e.clientX - rect.left; const y = e.clientY - rect.top; const pxPerSecCurrent = (els.cSpec.width) / meta.duration; const t = Math.max(0, Math.min(meta.duration, x / pxPerSecCurrent)); const hz = (1 - (y / els.cSpec.height)) * (Number(els.maxHz.value)||meta.nyquist - (Number(els.minHz.value)||0)) + (Number(els.minHz.value)||0); els.cursor.textContent = `${fmtTime(t)} · ${Math.round(hz).toLocaleString()} Hz`; });
+  els.wrap.addEventListener('dblclick', ()=>{ zoomX=1; zoomY=1; applyZoom(); });
+  els.cTime.addEventListener('click', (e)=>{ const rect = els.cTime.getBoundingClientRect(); const x = e.clientX - rect.left; const left = Math.max(0, x - els.wrap.clientWidth/2); els.wrap.scrollLeft = left; });
+  els.cFreq.addEventListener('click', (e)=>{ els.wrap.scrollTop = Math.max(0, e.clientY - els.wrap.clientHeight/2); });
+
+  // Buttons
+  els.btnRender.addEventListener('click', ()=>{ render(); });
+  els.btnDownload.addEventListener('click', ()=>{ const totalW = els.cFreq.width + els.cSpec.width; const totalH = els.cTime.height + els.cSpec.height; const c = document.createElement('canvas'); c.width = totalW; c.height = totalH; const cx = c.getContext('2d'); cx.fillStyle = '#0f1432'; cx.fillRect(0,0,totalW,totalH); cx.drawImage(els.cTime, els.cFreq.width, 0); cx.drawImage(els.cFreq, 0, els.cTime.height); cx.drawImage(els.cSpec, els.cFreq.width, els.cTime.height); const link = document.createElement('a'); link.download='spectrogram.png'; link.href=c.toDataURL('image/png'); link.click(); });
+
+  // Initial rulers
+  (function(){ const width = Math.ceil(10 * Number(els.pxPerSec.value)); els.cTime.width = width; els.cTime.height = 28; els.cTime.style.left = '70px'; els.cTime.style.top='0px'; els.cFreq.width = 70; els.cFreq.height = Number(els.pxH.value); els.cFreq.style.left='0px'; els.cFreq.style.top = '28px'; els.cSpec.width = width; els.cSpec.height = Number(els.pxH.value); els.cSpec.style.position='absolute'; els.cSpec.style.left = '70px'; els.cSpec.style.top = '28px'; drawRulers(); })();
+  </script>
+</body>
+</html>
