@@ -1,4 +1,43 @@
 <!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SpectroGhost Studio â€” Creator + Inverter</title>
+  <style>
+    :root{ --bg:#0c1020; --card:#121735; --ink:#eef1ff; --dim:#b9c6ef; --border:#2b3868; --accent:#7cc9ff; }
+    *{ box-sizing:border-box }
+    html,body{ height:100% }
+    body{ margin:0; background:var(--bg); color:var(--ink); font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial }
+    .bar{ display:flex; gap:10px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--border);
+         background:linear-gradient(180deg,#151c3b,#13183a) }
+    .tabs button{ background:#1a2047; color:var(--ink); border:1px solid var(--border); padding:8px 12px;
+         border-radius:10px; cursor:pointer }
+    .tabs button.active{ background:#26307a; border-color:#86a6ff }
+    .wrap{ position:relative; height:calc(100vh - 56px) }
+    .pane{ position:absolute; inset:0; display:none }
+    .pane.active{ display:block }
+    iframe{ position:absolute; inset:0; width:100%; height:100%; border:0; background:transparent }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <div class="tabs">
+      <button id="tabCreate" class="active">Spectrogram Creator</button>
+      <button id="tabInvert">Spectrogram Inverter</button>
+    </div>
+  </div>
+  <div class="wrap">
+    <div id="paneCreate" class="pane active">
+      <iframe id="frameCreate" sandbox="allow-scripts allow-downloads allow-forms" referrerpolicy="no-referrer"></iframe>
+    </div>
+    <div id="paneInvert" class="pane">
+      <iframe id="frameInvert" sandbox="allow-scripts allow-downloads allow-forms" referrerpolicy="no-referrer"></iframe>
+    </div>
+  </div>
+
+  <template id="tpl-creator">
+<!doctype html>
 <html lang="en" data-bs-theme="dark">
 <head>
   <meta charset="utf-8" />
@@ -42,8 +81,9 @@
         <div class="ms-auto small text-dim status" id="status">Idle</div>
       </div>
       <div class="row g-3 pt-3 align-items-end">
+        <!-- Row 1: File, FFT size, Max freq, Make invertible -->
         <div class="col-12 col-md-5">
-          <label class="form-label small text-secondary" for="fileIn">Audio file (mp3, wav, m4a, ogg…)</label>
+          <label class="form-label small text-secondary" for="fileIn">Audio file (mp3, wav, m4a, oggâ€¦)</label>
           <input type="file" id="fileIn" class="form-control" accept="audio/*" />
         </div>
         <div class="col-6 col-md-2">
@@ -53,10 +93,20 @@
           </select>
         </div>
         <div class="col-6 col-md-2">
-          <label class="form-label small text-secondary" for="hopPct">Hop (%)</label>
-          <input type="number" id="hopPct" class="form-control" value="25" min="1" max="90" />
+          <label class="form-label small text-secondary" for="maxHz">Max freq (Hz)</label>
+          <input type="number" id="maxHz" class="form-control" value="0" min="0" />
         </div>
-        <div class="col-6 col-md-1">
+        <div class="col-6 col-md-3 mt-4 pt-1 d-grid">
+          <button id="btnMakeInvertible" class="btn btn-outline-success">Make invertible</button>
+        </div>
+
+        <!-- Row 2: Min freq, Height, Px/sec -->
+        <div class="w-100 d-none d-md-block"></div>
+        <div class="col-6 col-md-2">
+          <label class="form-label small text-secondary" for="minHz">Min freq (Hz)</label>
+          <input type="number" id="minHz" class="form-control" value="0" min="0" />
+        </div>
+        <div class="col-6 col-md-2">
           <label class="form-label small text-secondary" for="pxH">Height (px)</label>
           <input type="number" id="pxH" class="form-control" value="480" min="200" max="4000" />
         </div>
@@ -64,14 +114,9 @@
           <label class="form-label small text-secondary" for="pxPerSec">Px / sec</label>
           <input type="number" id="pxPerSec" class="form-control" value="300" min="50" max="4000" />
         </div>
-        <div class="col-6 col-md-2">
-          <label class="form-label small text-secondary" for="minHz">Min freq (Hz)</label>
-          <input type="number" id="minHz" class="form-control" value="0" min="0" />
-        </div>
-        <div class="col-6 col-md-2">
-          <label class="form-label small text-secondary" for="maxHz">Max freq (Hz)</label>
-          <input type="number" id="maxHz" class="form-control" value="0" min="0" />
-        </div>
+
+        <!-- Row 3: Scale, Dynamic range, Colormap, dB offset, Normalize, Auto render -->
+        <div class="w-100 d-none d-md-block"></div>
         <div class="col-6 col-md-2">
           <label class="form-label small text-secondary" for="scale">Scale</label>
           <select id="scale" class="form-select"><option value="linear" selected>Linear</option><option value="log">Log</option></select>
@@ -80,20 +125,65 @@
           <label class="form-label small text-secondary" for="dynRange">Dynamic range (dB)</label>
           <input type="number" id="dynRange" class="form-control" value="80" min="20" max="140" />
         </div>
+        <div class="col-6 col-md-3">
+          <label class="form-label small text-secondary" for="colormap">Colormap</label>
+          <select id="colormap" class="form-select">
+            <option value="spectroghost" selected>SpectroGhost</option>
+            <option value="parula">Parula</option>
+            <option value="turbo">Turbo</option>
+            <option value="jet">Jet</option>
+            <option value="hsv">HSV</option>
+            <option value="hot">Hot</option>
+            <option value="cool">Cool</option>
+            <option value="spring">Spring</option>
+            <option value="summer">Summer</option>
+            <option value="autumn">Autumn</option>
+            <option value="winter">Winter</option>
+            <option value="gray">Grayscale</option>
+            <option value="bone">Bone</option>
+            <option value="copper">Copper</option>
+            <option value="pink">Pink</option>
+          </select>
+        </div>
+        <div class="col-6 col-md-3 form-check mt-4 pt-2">
+          <input class="form-check-input" type="checkbox" id="invertColors" />
+          <label class="form-check-label small text-secondary" for="invertColors">Invert colors</label>
+        </div>
+
+        <div class="col-6 col-md-2">
+          <label class="form-label small text-secondary" for="dbOffset">dB offset</label>
+          <input type="number" id="dbOffset" class="form-control" value="0" min="-80" max="80" step="1" />
+        </div>
+        <div class="col-6 col-md-2 form-check mt-4 pt-2">
+          <input class="form-check-input" type="checkbox" id="normalize" checked />
+          <label class="form-check-label small text-secondary" for="normalize">Normalize magnitudes</label>
+        </div>
+        <div class="col-6 col-md-2 form-check mt-4 pt-2">
+          <input class="form-check-input" type="checkbox" id="autoRender" checked />
+          <label class="form-check-label small text-secondary" for="autoRender">Auto render</label>
+        </div>
+
+        <!-- Row 4: Manual render and Export -->
+        <div class="w-100 d-none d-md-block"></div>
+        <div class="col-6 col-md-2 mt-2 d-grid">
+          <button id="btnRenderNow" class="btn btn-primary" style="display:none;">Render now</button>
+        </div>
+        <div class="col-12" id="heavyNote" style="display:none;">
+          <small class="text-warning">Auto render is off for a large job. Use Render now or lower resolution.</small>
+        </div>
         <div class="col-12 col-md-4 d-grid d-md-flex gap-2">
-          <button id="btnRender" class="btn btn-primary">Render spectrogram</button>
           <button id="btnDownload" class="btn btn-outline-light" disabled>Export PNG</button>
         </div>
-      </div>
+      </div></div>
       <div class="row g-2 mt-2 small text-dim">
-        <div class="col-12">Mouse wheel = horizontal zoom · Shift + wheel = vertical zoom · Drag to pan · Click on ruler to jump · Double‑click to reset zoom</div>
+        <div class="col-12">Mouse wheel = horizontal zoom Â· Shift + wheel = vertical zoom Â· Drag to pan Â· Click on ruler to jump Â· Doubleâ€‘click to reset zoom</div>
       </div>
     </section>
 
     <section class="gg-card p-3">
       <div class="d-flex align-items-center gap-2 pb-2 border-bottom gg-border">
         <span class="badge rounded-pill gg-badge">Spectrogram</span>
-        <div class="ms-auto small text-dim status" id="cursor">00:00.000 · 0 Hz</div>
+        <div class="ms-auto small text-dim status" id="cursor">00:00.000 Â· 0 Hz</div>
       </div>
       <div class="pt-3">
         <div id="specWrap" class="spec-wrap" style="height: 520px;">
@@ -117,56 +207,217 @@
   };
   function hann(N){ const w=new Float32Array(N); for(let n=0;n<N;n++){ w[n]=0.5*(1-Math.cos(2*Math.PI*n/(N-1))); } return w; }
   function FFT(N, re, im){ let i=0, j=0; for(i=0;i<N;i++){ if(j>i){ [re[i],re[j]]=[re[j],re[i]]; [im[i],im[j]]=[im[j],im[i]]; } let m = N>>1; while(m>=1 && j>=m){ j-=m; m>>=1; } j+=m; } for(let len=2; len<=N; len<<=1){ const ang=-2*Math.PI/len; const wlenr=Math.cos(ang), wleni=Math.sin(ang); for(let i=0;i<N;i+=len){ let wr=1, wi=0; for(let k=0;k<len/2;k++){ const u_r=re[i+k], u_i=im[i+k]; const v_r=re[i+k+len/2]*wr - im[i+k+len/2]*wi; const v_i=re[i+k+len/2]*wi + im[i+k+len/2]*wr; re[i+k]=u_r+v_r; im[i+k]=u_i+v_i; re[i+k+len/2]=u_r-v_r; im[i+k+len/2]=u_i-v_i; const nwr=wr*wlenr - wi*wleni; wi=wr*wleni + wi*wlenr; wr=nwr; } } } }
-  function makeLUT(){ const lut=new Uint8ClampedArray(256*4); for(let i=0;i<256;i++){ const t=i/255; let r,g,b; if(t<0.25){ const u=t/0.25; r=40*u; g=20*u; b=60+120*u; } else if(t<0.5){ const u=(t-0.25)/0.25; r=40+160*u; g=20*(1-u); b=180-40*u; } else if(t<0.75){ const u=(t-0.5)/0.25; r=200+40*u; g=20+150*u; b=140*(1-u); } else { const u=(t-0.75)/0.25; r=240+15*u; g=170+85*u; b=0+40*u; } lut[i*4+0]=Math.max(0,Math.min(255,Math.round(r))); lut[i*4+1]=Math.max(0,Math.min(255,Math.round(g))); lut[i*4+2]=Math.max(0,Math.min(255,Math.round(b))); lut[i*4+3]=255; } return lut; }
-  const LUT = makeLUT();
-
-  // Always return a promise with an ImageBitmap
-  async function imageBitmapFrom(off, img, w, h){
-    if (off && typeof off.transferToImageBitmap === 'function'){
-      return Promise.resolve(off.transferToImageBitmap());
+  // Colormap LUTs (256 x RGBA). Many are approximations of standard MATLAB colormaps.
+  function clamp8(x){ return Math.max(0, Math.min(255, Math.round(x))); }
+  function lutFromFunc(fn){
+    const lut=new Uint8ClampedArray(256*4);
+    for(let i=0;i<256;i++){
+      const t=i/255; const [r,g,b]=fn(t);
+      lut[i*4+0]=clamp8(r); lut[i*4+1]=clamp8(g); lut[i*4+2]=clamp8(b); lut[i*4+3]=255;
     }
-    const c = (off && off.getContext) ? off : document.createElement('canvas');
-    c.width = w; c.height = h; c.getContext('2d').putImageData(img,0,0);
-    return await createImageBitmap(c);
+    return lut;
+  }
+  const CM = {
+    spectroghost: ()=>lutFromFunc(t=>{
+      let r,g,b;
+      if(t<0.25){ const u=t/0.25; r=40*u; g=20*u; b=60+120*u; }
+      else if(t<0.5){ const u=(t-0.25)/0.25; r=40+160*u; g=20*(1-u); b=180-40*u; }
+      else if(t<0.75){ const u=(t-0.5)/0.25; r=200+40*u; g=20+150*u; b=140*(1-u); }
+      else { const u=(t-0.75)/0.25; r=240+15*u; g=170+85*u; b=0+40*u; }
+      return [r,g,b];
+    }),
+    gray: ()=>lutFromFunc(t=>[t*255, t*255, t*255]),
+    jet: ()=>lutFromFunc(t=>{ // classic jet
+      const r = Math.min(1, Math.max(0, 1.5 - Math.abs(4*t - 3)));
+      const g = Math.min(1, Math.max(0, 1.5 - Math.abs(4*t - 2)));
+      const b = Math.min(1, Math.max(0, 1.5 - Math.abs(4*t - 1)));
+      return [r*255,g*255,b*255];
+    }),
+    hsv: ()=>lutFromFunc(t=>{ // full hue sweep
+      const h = t*360; const s=1; const v=1;
+      const c=v*s; const x=c*(1-Math.abs((h/60)%2-1)); const m=v-c;
+      let r,g,b;
+      if(h<60){[r,g,b]=[c,x,0];}
+      else if(h<120){[r,g,b]=[x,c,0];}
+      else if(h<180){[r,g,b]=[0,c,x];}
+      else if(h<240){[r,g,b]=[0,x,c];}
+      else if(h<300){[r,g,b]=[x,0,c];}
+      else {[r,g,b]=[c,0,x];}
+      return [(r+m)*255,(g+m)*255,(b+m)*255];
+    }),
+    hot: ()=>lutFromFunc(t=>{
+      // black -> red -> yellow -> white
+      let r = Math.min(1, 3*t);
+      let g = Math.min(1, 3*t-1);
+      let b = Math.min(1, 3*t-2);
+      return [r*255, Math.max(0,g)*255, Math.max(0,b)*255];
+    }),
+    cool: ()=>lutFromFunc(t=>[t*255, (1-t)*255, 255]),
+    spring: ()=>lutFromFunc(t=>[255, t*255, 255*(1-t)]),
+    summer: ()=>lutFromFunc(t=>[t*255, 128+127*t, 102]),
+    autumn: ()=>lutFromFunc(t=>[255, t*255, 0]),
+    winter: ()=>lutFromFunc(t=>[0, 128+127*t, 255*(1-t)]),
+    bone: ()=>lutFromFunc(t=>{ const r=255*(7*t/8 + 1/8); const g=255*(7*t/8 + 1/8); const b=255*(6*t/8 + 2/8); return [r,g,b]; }),
+    copper: ()=>lutFromFunc(t=>[255*(t), 255*(0.7812*t), 255*(0.4975*t)]),
+    pink: ()=>lutFromFunc(t=>{ const r=255*Math.sqrt(t); const g=255*t; const b=255*Math.sqrt(1-t)*0.5 + 255*t*0.5; return [r,g,b]; }),
+    parula: ()=>lutFromFunc(t=>{ // simple parula-like approximation
+      const r = 53. / 255 + t*(224./255);
+      const g = 42. / 255 + t*(216./255);
+      const b = 135./ 255 + t*( 67./255);
+      return [r*255,g*255,b*255];
+    }),
+    turbo: ()=>lutFromFunc(t=>{ // Google Turbo approximation
+      const r = 34.61 + t*(1172.33 + t*(-10793.56 + t*(33300.12 + t*(-38394.49 + t*(15054.07)))));
+      const g = 23.31 + t*(557.33  + t*(1225.33  + t*(-3574.96  + t*(4753.05   + t*(-1920.97)))));
+      const b = 27.2  + t*(3211.1   + t*(-15327.97 + t*(27814.0   + t*(-22569.18 + t*(6838.66)))));
+      return [r, g, b];
+    }),
+  };
+  function getLUTByName(name){
+    const maker = CM[name] || CM.spectroghost;
+    return maker();
+  }
+  let LUT = getLUTByName('spectroghost');
+
+  // Auto render with debounce and heavy-job guard
+  let debounceTimer = null;
+  let renderJobId = 0;
+  let invMode = false;
+  let isRendering = false;
+  const MAX_OFFSCREEN_W = 8000; // cap offscreen width to keep UI responsive
+
+  async function sgYield(){ return new Promise(r=>setTimeout(r,0)); }
+
+  let lastHeavyWarnTs = 0;
+
+  function estimateWork(){
+    if(!meta) return 0;
+    const pxPerSec = Number(els.pxPerSec?.value||0) || 0;
+    const h = Number(els.pxH?.value||0) || 0;
+    const dur = meta.duration||0;
+    const frames = Math.max(1, Math.ceil(dur * pxPerSec)); // estimate uses requested px/sec
+    const bins = Math.max(1, h);
+    return frames * bins;
   }
 
+  function scheduleRender(delay=500){
+    if(!els.autoRender || !els.autoRender.checked) return;
+    const work = estimateWork();
+    const HEAVY = 6e7; // 60 million pixels worth of work
+    if(work > HEAVY){
+      const now = Date.now();
+      if(now - lastHeavyWarnTs > 4000){
+        console.warn("Auto render disabled for heavy job, please adjust settings or use 'Render now'.");
+        lastHeavyWarnTs = now;
+        if(els.autoRender) els.autoRender.checked = false; updateManualRenderUI();
+      }
+      return;
+    }
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(()=>{
+      startRenderJob();
+    }, delay);
+  }
+
+  
+  function updateManualRenderUI(){
+    const on = !!(els.autoRender && els.autoRender.checked);
+    if(els.btnRenderNow){ els.btnRenderNow.style.display = on ? 'none' : 'block'; }
+    if(els.heavyNote){ els.heavyNote.style.display = on ? 'none' : 'block'; }
+  }
+
+async function startRenderJob(){ if(isRendering) return; isRendering = true;
+    const myJob = ++renderJobId;
+    try{
+      await render();
+      if(myJob !== renderJobId){
+        // superseded by a newer render, ignore
+        return;
+      }
+    } catch(e){
+      if(myJob !== renderJobId){
+        // ignore errors from cancelled jobs
+        return;
+      }
+      console.error(e);
+    }
+    finally { isRendering = false; }
+  }
+
+
+  // Always return a promise with an ImageBitmap
   // ---------- App State ----------
   const els = {
-    fileIn: document.getElementById('fileIn'), fftSize: document.getElementById('fftSize'), hopPct: document.getElementById('hopPct'),
+    fileIn: document.getElementById('fileIn'), fftSize: document.getElementById('fftSize'),
     pxH: document.getElementById('pxH'), pxPerSec: document.getElementById('pxPerSec'), minHz: document.getElementById('minHz'), maxHz: document.getElementById('maxHz'),
-    scale: document.getElementById('scale'), dynRange: document.getElementById('dynRange'), btnRender: document.getElementById('btnRender'), btnDownload: document.getElementById('btnDownload'),
+    scale: document.getElementById('scale'), dynRange: document.getElementById('dynRange'), colormap: document.getElementById('colormap'), dbOffset: document.getElementById('dbOffset'), normalize: document.getElementById('normalize'), autoRender: document.getElementById('autoRender'), btnDownload: document.getElementById('btnDownload'), btnRenderNow: document.getElementById('btnRenderNow'), heavyNote: document.getElementById('heavyNote'),
     status: document.getElementById('status'), cursor: document.getElementById('cursor'),
     wrap: document.getElementById('specWrap'), inner: document.getElementById('specInner'),
     cSpec: document.getElementById('specCanvas'), cTime: document.getElementById('timeRuler'), cFreq: document.getElementById('freqRuler')
   };
+    
+    // Wire manual render UI after `els` is defined
+    if(els.btnRenderNow){
+      els.btnRenderNow && els.btnRenderNow.addEventListener('click', ()=>{ startRenderJob(); });
+    }
+    if(typeof updateManualRenderUI === 'function'){
+      updateManualRenderUI();
+    }
+    
   const ctxSpec = els.cSpec.getContext('2d');
-  const ctxTime = els.cTime.getContext('2d');
-  const ctxFreq = els.cFreq.getContext('2d');
+  function noSmooth(ctx){ try{ ctx.imageSmoothingEnabled = false; }catch(_e){} return ctx; }
+  noSmooth(ctxSpec);
+  const ctxTime = els.cTime.getContext('2d'); noSmooth(ctxTime);
+  const ctxFreq = els.cFreq.getContext('2d'); noSmooth(ctxFreq);
 
   let audioCtx; let decoded; let meta={ sampleRate:0, duration:0, nyquist:0};
   let offscreen; let zoomX=1, zoomY=1;
 
   // ---------- Decode ----------
   async function decode(file){
-    els.status.textContent = `Decoding ${file.name}…`;
+    els.status.textContent = `Decoding ${file.name}â€¦`;
     if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
     const buf = await file.arrayBuffer();
     decoded = await audioCtx.decodeAudioData(buf);
     meta.sampleRate = decoded.sampleRate; meta.duration = decoded.duration; meta.nyquist = decoded.sampleRate/2;
-    els.status.textContent = `Loaded ${file.name} · ${fmtTime(meta.duration)} · ${Math.round(meta.sampleRate)} Hz`;
+    els.status.textContent = `Loaded ${file.name} Â· ${fmtTime(meta.duration)} Â· ${Math.round(meta.sampleRate)} Hz`;
     if(Number(els.maxHz.value)<=0){ els.maxHz.value = Math.floor(meta.nyquist); }
   }
 
-  els.fileIn.addEventListener('change', async ()=>{
+  els.colormap && els.colormap.addEventListener('change', ()=>{ LUT = getLUTByName(els.colormap.value); scheduleRender(250); });
+  els.dbOffset && els.dbOffset.addEventListener('change', ()=>{ scheduleRender(300); });
+  els.normalize && els.normalize.addEventListener('change', ()=>{ scheduleRender(300); });
+  const invChk = document.getElementById('invertColors'); if(invChk){ invChk.addEventListener('change', ()=> scheduleRender(150)); }
+
+
+  // Auto render hooks for other controls
+  ['fftSize','pxPerSec','pxH','minHz','maxHz','scale','dynRange'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el){
+      el.addEventListener('change', ()=>scheduleRender(500));
+      if(el.type === 'range' || el.type === 'number'){
+        el.addEventListener('input', ()=>scheduleRender(300));
+      }
+    }
+  });
+  if(els.autoRender){
+    els.autoRender && els.autoRender.addEventListener('change', ()=>{
+      updateManualRenderUI();
+      if(els.autoRender.checked) scheduleRender(250);
+    });
+    updateManualRenderUI();
+  }
+
+  els.fileIn && els.fileIn.addEventListener('change', async ()=>{
     const f = els.fileIn.files && els.fileIn.files[0];
-    if(f){ offscreen=null; await decode(f); render(); }
+    if(f){ offscreen=null; await decode(f); scheduleRender(250); }
   });
 
   // ---------- STFT rendering ----------
-  function computeSpectrogram(){
+  async function computeSpectrogram(){
     if(!decoded) return null;
     const N = Number(els.fftSize.value);
-    const hop = Math.max(1, Math.round(N * (Number(els.hopPct.value)/100)));
+    const hop = Math.max(1, Math.round(N * 0.5)); // fixed 50% hop
     const ch = decoded.getChannelData(0);
     const window = hann(N);
     const frames = Math.max(1, 1 + Math.floor((ch.length - N) / hop));
@@ -177,19 +428,32 @@
       for(let i=0;i<N;i++){ re[i] = (ch[pos+i]||0) * window[i]; im[i]=0; }
       FFT(N, re, im);
       for(let k=0;k<bins;k++){ const rr=re[k], ii=im[k]; mag[f*bins+k] = Math.hypot(rr,ii)/N; }
+      if((f & 63)===0){ await sgYield(); }
     }
     return { mag, frames, bins, N, hop };
   }
 
   async function render(){
     if(!decoded){ els.status.textContent = 'Load an audio file to begin.'; return; }
-    els.status.textContent = 'Computing spectrogram…';
-    const res = computeSpectrogram();
+    els.status.textContent = 'Computing spectrogramâ€¦ (async)';
+    const res = await computeSpectrogram();
     if(!res){ els.status.textContent = 'Unable to compute.'; return; }
     const { mag, frames, bins } = res;
-    const dyn = Number(els.dynRange.value);
-    let maxVal = 0; for(let i=0;i<mag.length;i++){ if(mag[i]>maxVal) maxVal=mag[i]; }
-    const toDB = x => 20*Math.log10((x+1e-12)/maxVal);
+const dyn = Number(els.dynRange.value);
+const dbShift = Number(els.dbOffset.value)||0;
+let maxVal = 0;
+if(invMode){ for(let i=0;i<mag.length;i++){ if(mag[i]>maxVal) maxVal=mag[i]; } }
+else if(els.normalize && els.normalize.checked){
+  const sample = [];
+  const stepF = Math.max(1, Math.floor(frames/256));
+  const stepB = Math.max(1, Math.floor(bins/128));
+  for(let f=0; f<frames; f+=stepF){ for(let b=0; b<bins; b+=stepB){ const v = mag[b*frames+f]; if(v>0) sample.push(v);} }
+  if(sample.length>0){ sample.sort((a,b)=>a-b); maxVal = sample[Math.min(sample.length-1, Math.floor(sample.length*0.99))]||0; }
+  if(maxVal<=0){ for(let i=0;i<mag.length;i++){ if(mag[i]>maxVal) maxVal=mag[i]; } }
+} else { maxVal = 1.0; }
+if(!(maxVal>0)) maxVal = 1e-9;
+const effShift = invMode ? 0 : dbShift;
+const toDB = x => 20*Math.log10((x+1e-12)/maxVal) + effShift;
     const minHz = Math.max(0, Number(els.minHz.value)||0);
     const maxHz = Math.min(meta.nyquist, Number(els.maxHz.value)||meta.nyquist);
     const minBin = 0 | Math.max(0, Math.floor(minHz / meta.nyquist * (bins-1)));
@@ -200,28 +464,73 @@
     const off = (typeof OffscreenCanvas !== 'undefined') ? new OffscreenCanvas(offW, offH) : (function(){ const c=document.createElement('canvas'); c.width=offW; c.height=offH; return c; })();
     const octx = off.getContext('2d', { willReadFrequently: true });
     const img = octx.createImageData(offW, offH);
+    if(!offscreen) offscreen = {};
+    if(!offscreen.gray8 || offscreen.gray8.length !== offW*offH){ offscreen.gray8 = new Uint8ClampedArray(offW*offH); }
+    if(!offscreen.gray16 || offscreen.gray16.length !== offW*offH){ offscreen.gray16 = new Uint16Array(offW*offH); }
+    if(!offscreen || !offscreen.gray8 || offscreen.gray8.length !== offW*offH){ offscreen = offscreen || {}; offscreen.gray8 = new Uint8ClampedArray(offW*offH); }
     const data = img.data;
+    
     const scale = els.scale.value;
-    const binToY = k => scale==='linear'
-      ? (usedBins-1 - (k - minBin))
-      : (usedBins-1 - Math.floor((Math.log10((k+1)) - Math.log10(Math.max(1,minBin+1))) / (Math.log10(maxBin+1) - Math.log10(Math.max(1,minBin+1))) * (usedBins-1)));
-    const rowForBin = new Int32Array(usedBins);
-    for(let k=minBin, j=0; k<=maxBin; k++, j++) rowForBin[j] = binToY(k);
+    // Determine output height: linear uses number of used bins, log uses requested px height
+    const outH = (scale==='linear') ? usedBins : Number(els.pxH.value);
+    // Recreate offscreen sized to outH
+    const off2 = (typeof OffscreenCanvas !== 'undefined') ? new OffscreenCanvas(offW, outH) : (function(){ const c=document.createElement('canvas'); c.width=offW; c.height=outH; return c; })();
+    const octx2 = off2.getContext('2d', { willReadFrequently: true });
+    const img2 = octx2.createImageData(offW, outH);
+    const data2 = img2.data;
 
-    for(let f=0; f<frames; f++){
-      for(let j=0;j<usedBins;j++){
-        const k = minBin + j; const db = toDB(mag[f*bins + k]);
-        const v = Math.max(0, Math.min(255, Math.round(255 * (1 - Math.min(dyn, Math.max(0, -db)) / dyn))));
-        const y = rowForBin[j]; const idx = (y*offW + f) * 4;
-        data[idx+0]=LUT[v*4+0]; data[idx+1]=LUT[v*4+1]; data[idx+2]=LUT[v*4+2]; data[idx+3]=255;
+    // Helper to map output row y -> FFT bin k (nearest) according to current scale
+    function rowToBin(y){
+      const frac = (outH<=1)? 0 : (y / (outH-1)); // 0 at top or bottom? keep low freq at bottom as before
+      // Our canvas has y=0 at top. We want y=outH-1 => minBin, y=0 => maxBin
+      const t = 1 - frac;
+      if(scale==='linear'){
+        const kf = minBin + t * (usedBins-1);
+        let k = Math.round(kf);
+        if(k < minBin) k = minBin;
+        if(k > maxBin) k = maxBin;
+        return k;
+      }else{
+        const minSafe = Math.max(1, Number(els.minHz.value)||1);
+        const maxSafe = Math.max(minSafe*1.001, Number(els.maxHz.value)||meta.nyquist);
+        const f = minSafe * Math.pow(maxSafe/minSafe, t);
+        let k = Math.round((f / meta.nyquist) * (bins-1));
+        if(k < minBin) k = minBin;
+        if(k > maxBin) k = maxBin;
+        return k;
       }
     }
-    octx.putImageData(img,0,0);
 
-    const bmp = await imageBitmapFrom(off, img, offW, offH);
-    offscreen = { bmp, w: offW, h: offH, usedBins, frames };
+    for(let f=0; f<frames; f++){ if((f & 63) === 0) { await sgYield(); }
+      for(let y=0;y<outH;y++){
+        const k = rowToBin(y);
+        const db = toDB(mag[f*bins + k]);
+        const v = Math.max(0, Math.min(255, Math.round(255 * (1 - Math.min(dyn, Math.max(0, -db)) / dyn))));
+        const idx = (y*offW + f) * 4;
+        if(document.getElementById('invertColors')?.checked){
+          data2[idx+0]=255-(LUT[v*4+0]); data2[idx+1]=255-(LUT[v*4+1]); data2[idx+2]=255-(LUT[v*4+2]); data2[idx+3]=255;
+        }else{
+          data2[idx+0]=LUT[v*4+0]; data2[idx+1]=LUT[v*4+1]; data2[idx+2]=LUT[v*4+2]; data2[idx+3]=255;
+        }
+        if(!offscreen) offscreen={};
+        // keep grayscale caches in sync
+        if(!offscreen.gray8 || offscreen.gray8.length !== offW*outH){ offscreen.gray8 = new Uint8ClampedArray(offW*outH); }
+        if(!offscreen.gray16 || offscreen.gray16.length !== offW*outH){ offscreen.gray16 = new Uint16Array(offW*outH); }
+        offscreen.gray8[y*offW + f] = v;
+        if(offscreen.gray16){ offscreen.gray16[y*offW + f] = Math.max(0, Math.min(65535, ((v<<8) | v))); }
+      }
+    }
+    octx2.putImageData(img2,0,0);
+
+    // Update offscreen snapshot for layout/draw
+    offscreen = { w: offW, h: outH, usedBins: outH, frames, imageData: img2, gray8: offscreen.gray8, gray16: offscreen.gray16 };
+    offscreen.baseSpecW = Math.ceil(meta.duration * Number(els.pxPerSec.value));
+    offscreen.baseSpecH = Number(els.pxH.value);
     layout();
-    els.status.textContent = `Rendered ${frames} frames × ${usedBins} bins`;
+    const effPxPerSec = Math.max(1, Math.round(Number(els.pxPerSec.value)));
+    els.status.textContent = `Rendered ${frames}Ã—${outH}${invMode?' â€¢ invertible':''} â€¢ ${els.scale.value} freq â€¢ canvas ${els.cSpec.width}Ã—${els.cSpec.height}`;
+    els.btnDownload.disabled = false;
+
     els.btnDownload.disabled = false;
   }
 
@@ -238,16 +547,20 @@
     els.cTime.width = width; els.cTime.height = 28; els.cTime.style.left = '70px'; els.cTime.style.top='0px';
     els.cFreq.width = 70; els.cFreq.height = pxH; els.cFreq.style.left='0px'; els.cFreq.style.top = '28px';
     els.cSpec.width = width; els.cSpec.height = pxH; els.cSpec.style.position='absolute'; els.cSpec.style.left = '70px'; els.cSpec.style.top = '28px';
-    drawSpectrogram(); drawRulers();
+    drawSpectrogram(); drawRulers(); els.status.textContent = `Rendered ${frames}Ã—${pxH} â€¢ canvas ${els.cSpec.width}x${els.cSpec.height}`;
   }
 
   function drawSpectrogram(){
-    if(!offscreen) return;
-    const { bmp, w, h } = offscreen;
-    ctxSpec.clearRect(0,0,els.cSpec.width, els.cSpec.height);
-    ctxSpec.drawImage(bmp, 0,0,w,h, 0,0, els.cSpec.width, els.cSpec.height);
-  }
-  function drawRulers(){
+  if(!offscreen || !offscreen.imageData) return;
+  const { w, h, imageData } = offscreen;
+  const tmp = document.createElement('canvas');
+  tmp.width = w; tmp.height = h;
+  const tctx = noSmooth(tmp.getContext('2d', { willReadFrequently: true }));
+  tctx.putImageData(imageData, 0, 0);
+  noSmooth(ctxSpec); ctxSpec.fillStyle = '#0c1024'; ctxSpec.fillRect(0,0,els.cSpec.width,els.cSpec.height);
+ctxSpec.drawImage(tmp, 0, 0, w, h, 0, 0, els.cSpec.width, els.cSpec.height);
+}
+function drawRulers(){
     const w = els.cTime.width, h=els.cTime.height; ctxTime.clearRect(0,0,w,h);
     ctxTime.fillStyle='#10183c'; ctxTime.fillRect(0,0,w,h);
     ctxTime.strokeStyle='#2b3868'; ctxTime.beginPath(); ctxTime.moveTo(0,h-0.5); ctxTime.lineTo(w,h-0.5); ctxTime.stroke();
@@ -263,31 +576,1553 @@
     const minHz = Number(els.minHz.value)||0; const maxHz = Number(els.maxHz.value)||meta.nyquist; const marks = 8;
     for(let i=0;i<=marks;i++){
       const frac = i/marks;
-      const hz = els.scale.value==='linear' ? (minHz + (maxHz-minHz)*frac) : Math.pow(10, Math.log10(minHz||1) + frac*(Math.log10(maxHz)-Math.log10(Math.max(1,minHz))));
+      const safeMin = Math.max(1, minHz);
+      const hz = els.scale.value==='linear' ? (minHz + (maxHz-minHz)*frac) : Math.pow(10, Math.log10(safeMin) + frac*(Math.log10(maxHz)-Math.log10(safeMin)));
       const y = fh - Math.round(frac*fh);
       ctxFreq.globalAlpha=1; ctxFreq.fillRect(fw-8, y, 8, 1);
       ctxFreq.globalAlpha=.9; ctxFreq.fillText(Math.round(hz).toLocaleString()+" Hz", fw-10, Math.min(fh-10, Math.max(10, y)));
     }
   }
 
-  // ---------- Interactions ----------
-  function applyZoom(){ if(!offscreen) return; const baseW = Math.ceil(meta.duration * Number(els.pxPerSec.value)); const baseH = Number(els.pxH.value); const newW = Math.max(200, Math.round(baseW * zoomX)); const newH = Math.max(200, Math.round(baseH * zoomY)); els.cTime.width = newW; els.cSpec.width = newW; els.cFreq.height = newH; els.cSpec.height = newH; drawSpectrogram(); drawRulers(); }
-  els.wrap.addEventListener('wheel', (e)=>{ if(!offscreen) return; const delta = Math.sign(e.deltaY) * 0.1; if(e.shiftKey){ zoomY = Math.max(0.25, Math.min(8, zoomY * (1 - delta))); } else { zoomX = Math.max(0.25, Math.min(16, zoomX * (1 - delta))); } applyZoom(); e.preventDefault(); }, { passive:false });
+  
+  function makeInvertible(){ invMode = true;
+    try{
+      if(!decoded || !meta){ els.status.textContent = 'Load audio first'; return; }
+      const N = Number(els.fftSize.value);
+      const sr = meta.sampleRate || (meta.contextSampleRate||44100);
+      const nyq = sr/2;
+      // Read desired max Hz from control, clamp to [1, nyquist]
+      let maxHz = Number(els.maxHz.value)||nyq;
+      if(maxHz > nyq) maxHz = nyq;
+      if(maxHz < 1) maxHz = 1;
+      // Map to nearest FFT bin edge
+      const kmax = Math.max(1, Math.min(Math.floor(maxHz * N / sr), Math.floor(N/2)));
+      const snappedMaxHz = kmax * sr / N;
+
+      // Frequency geometry, linear only, full band from 0 to snappedMaxHz
+      els.scale.value = 'linear';
+      els.minHz.value = 0;
+      els.maxHz.value = Math.round(snappedMaxHz);
+
+      // One row per bin used
+      const usedBins = kmax - 0 + 1;
+      els.pxH.value = usedBins;
+
+      // One column per hop, preview width ~ frames/sec = sr / hop  with hop = N/2
+      const pxps = Math.max(1, Math.round(2 * sr / N));
+      els.pxPerSec.value = pxps;
+
+      // Disable any offsets that would distort mapping
+      if(els.dbOffset) els.dbOffset.value = 0;
+      if(els.dynRange){ const d = Number(els.dynRange.value); if(!(d>0)) els.dynRange.value = 80; }
+      if(els.normalize) els.normalize.checked = true;
+
+      // Grayscale preview for clarity, export is grayscale regardless
+      if(els.colormap){ try{ els.colormap.value = 'gray'; }catch(_e){} }
+
+      // Apply the colormap change immediately if possible
+      if(window.getLUTByName && typeof getLUTByName==='function' && typeof LUT!=='undefined'){
+        try{ LUT = getLUTByName(els.colormap.value); }catch(_e){}
+      }
+
+
+      // Ensure auto render kicks in
+      if(typeof scheduleRender === 'function'){ scheduleRender(100); }
+      els.status.textContent = `Invertible config set â€¢ N=${N}, hop=${Math.round(N/2)} samples â€¢ px/sec â‰ˆ ${pxps} â€¢ bins=${usedBins} â€¢ maxHzâ‰ˆ${Math.round(snappedMaxHz)}`;
+    }catch(e){
+      console.error(e);
+      els.status.textContent = 'Could not apply invertible config';
+    }
+  }
+  const btnMI = document.getElementById('btnMakeInvertible');
+  if(btnMI){ btnMI.addEventListener('click', makeInvertible); }
+
+// ---------- Interactions ----------
+  function applyZoom(){ if(!offscreen) return; const baseW = Math.ceil(meta.duration * Number(els.pxPerSec.value)); const baseH = Number(els.pxH.value); const newW = Math.max(200, Math.round(baseW * zoomX)); const newH = Math.max(200, Math.round(baseH * zoomY)); els.cTime.width = newW; els.cSpec.width = newW; els.cFreq.height = newH; els.cSpec.height = newH; drawSpectrogram(); drawRulers(); els.status.textContent = `Rendered ${frames}Ã—${pxH} â€¢ canvas ${els.cSpec.width}x${els.cSpec.height}`; }
+  els.wrap && els.wrap && els.wrap.addEventListener('wheel', (e)=>{ if(!offscreen) return; const delta = Math.sign(e.deltaY) * 0.1; if(e.shiftKey){ zoomY = Math.max(0.25, Math.min(8, zoomY * (1 - delta))); } else { zoomX = Math.max(0.25, Math.min(16, zoomX * (1 - delta))); } applyZoom(); e.preventDefault(); }, { passive:false });
   let drag=false, sx=0, sy=0, scrollL=0, scrollT=0;
-  els.wrap.addEventListener('mousedown', (e)=>{ drag=true; sx=e.clientX; sy=e.clientY; scrollL=els.wrap.scrollLeft; scrollT=els.wrap.scrollTop; });
+  els.wrap && els.wrap && els.wrap.addEventListener('mousedown', (e)=>{ drag=true; sx=e.clientX; sy=e.clientY; scrollL=els.wrap.scrollLeft; scrollT=els.wrap.scrollTop; });
   window.addEventListener('mouseup', ()=> drag=false);
   window.addEventListener('mousemove', (e)=>{ if(!drag) return; els.wrap.scrollLeft = scrollL - (e.clientX - sx); els.wrap.scrollTop = scrollT - (e.clientY - sy); });
-  els.wrap.addEventListener('mousemove', (e)=>{ if(!offscreen) return; const rect = els.cSpec.getBoundingClientRect(); const x = e.clientX - rect.left; const y = e.clientY - rect.top; const pxPerSecCurrent = (els.cSpec.width) / meta.duration; const t = Math.max(0, Math.min(meta.duration, x / pxPerSecCurrent)); const hz = (1 - (y / els.cSpec.height)) * (Number(els.maxHz.value)||meta.nyquist - (Number(els.minHz.value)||0)) + (Number(els.minHz.value)||0); els.cursor.textContent = `${fmtTime(t)} · ${Math.round(hz).toLocaleString()} Hz`; });
-  els.wrap.addEventListener('dblclick', ()=>{ zoomX=1; zoomY=1; applyZoom(); });
-  els.cTime.addEventListener('click', (e)=>{ const rect = els.cTime.getBoundingClientRect(); const x = e.clientX - rect.left; const left = Math.max(0, x - els.wrap.clientWidth/2); els.wrap.scrollLeft = left; });
-  els.cFreq.addEventListener('click', (e)=>{ els.wrap.scrollTop = Math.max(0, e.clientY - els.wrap.clientHeight/2); });
+  els.wrap && els.wrap && els.wrap.addEventListener('mousemove', (e)=>{ if(!offscreen) return; const rect = els.cSpec.getBoundingClientRect(); const x = e.clientX - rect.left; const y = e.clientY - rect.top; const pxPerSecCurrent = (els.cSpec.width) / meta.duration; const t = Math.max(0, Math.min(meta.duration, x / pxPerSecCurrent)); const hz = (1 - (y / els.cSpec.height)) * (Number(els.maxHz.value)||meta.nyquist - (Number(els.minHz.value)||0)) + (Number(els.minHz.value)||0); els.cursor.textContent = `${fmtTime(t)} Â· ${Math.round(hz).toLocaleString()} Hz`; });
+  els.wrap && els.wrap && els.wrap.addEventListener('dblclick', ()=>{ zoomX=1; zoomY=1; applyZoom(); });
+  els.cTime && els.cTime && els.cTime.addEventListener('click', (e)=>{ const rect = els.cTime.getBoundingClientRect(); const x = e.clientX - rect.left; const left = Math.max(0, x - els.wrap.clientWidth/2); els.wrap.scrollLeft = left; });
+  els.cFreq && els.cFreq && els.cFreq.addEventListener('click', (e)=>{ els.wrap.scrollTop = Math.max(0, e.clientY - els.wrap.clientHeight/2); });
 
   // Buttons
-  els.btnRender.addEventListener('click', ()=>{ render(); });
-  els.btnDownload.addEventListener('click', ()=>{ const totalW = els.cFreq.width + els.cSpec.width; const totalH = els.cTime.height + els.cSpec.height; const c = document.createElement('canvas'); c.width = totalW; c.height = totalH; const cx = c.getContext('2d'); cx.fillStyle = '#0f1432'; cx.fillRect(0,0,totalW,totalH); cx.drawImage(els.cTime, els.cFreq.width, 0); cx.drawImage(els.cFreq, 0, els.cTime.height); cx.drawImage(els.cSpec, els.cFreq.width, els.cTime.height); const link = document.createElement('a'); link.download='spectrogram.png'; link.href=c.toDataURL('image/png'); link.click(); });
-
+  els.btnRender && els.btnRender.addEventListener('click', ()=>{ render(); });
   // Initial rulers
   (function(){ const width = Math.ceil(10 * Number(els.pxPerSec.value)); els.cTime.width = width; els.cTime.height = 28; els.cTime.style.left = '70px'; els.cTime.style.top='0px'; els.cFreq.width = 70; els.cFreq.height = Number(els.pxH.value); els.cFreq.style.left='0px'; els.cFreq.style.top = '28px'; els.cSpec.width = width; els.cSpec.height = Number(els.pxH.value); els.cSpec.style.position='absolute'; els.cSpec.style.left = '70px'; els.cSpec.style.top = '28px'; drawRulers(); })();
+  
+// Minimal 16-bit grayscale PNG encoder (store/no-compress), linear gAMA=1.0
+function _crc32(arr){const t=new Uint32Array(256);for(let n=0;n<256;n++){let r=n;for(let k=0;k<8;k++)r=(r&1)?(0xEDB88320^(r>>>1)):(r>>>1);t[n]=r>>>0;}let c=-1>>>0;for(let i=0;i<arr.length;i++)c=t[(c^arr[i])&255]^(c>>>8);c^=-1;return [(c>>>24)&255,(c>>>16)&255,(c>>>8)&255,c&255];}
+function _chunk(type, data){const len=data?data.length:0;const out=new Uint8Array(8+len+4);const dv=new DataView(out.buffer);dv.setUint32(0,len);out.set(type,4);if(data) out.set(data,8);const crcData=new Uint8Array(4+(data?len:0));crcData.set(type,0);if(data) crcData.set(data,4);out.set(_crc32(crcData),8+len);return out;}
+function _concat(arrs){let sz=0;for(const a of arrs) sz+=a.length;const o=new Uint8Array(sz);let p=0;for(const a of arrs){o.set(a,p);p+=a.length;}return o;}
+function _zlibStore(u8){function adler32(d){let a=1,b=0;for(let i=0;i<d.length;i++){a=(a+d[i])%65521;b=(b+a)%65521;}return (b<<16)|a;}const len=u8.length;const out=[0x78,0x01];let off=0;while(off<len){const blockLen=Math.min(65535,len-off);const isFinal=(off+blockLen>=len)?1:0;out.push(isFinal);out.push(blockLen&255,(blockLen>>>8)&255,(~blockLen)&255,((~blockLen)>>>8)&255);for(let i=0;i<blockLen;i++) out.push(u8[off+i]);off+=blockLen;}const ad=adler32(u8);out.push((ad>>>24)&255,(ad>>>16)&255,(ad>>>8)&255,ad&255);return new Uint8Array(out);}
+function encodeGray16(w,h,gray16,meta){
+  const sig=new Uint8Array([137,80,78,71,13,10,26,10]);
+  const ihdr=new Uint8Array(13);const dv=new DataView(ihdr.buffer);
+  dv.setUint32(0,w);dv.setUint32(4,h);ihdr[8]=16;ihdr[9]=0;ihdr[10]=0;ihdr[11]=0;ihdr[12]=0;
+  const chunks=[sig,_chunk(new Uint8Array([73,72,68,82]),ihdr)];
+  const gama=new Uint8Array(4);new DataView(gama.buffer).setUint32(0,100000);chunks.push(_chunk(new Uint8Array([103,65,77,65]),gama));
+  if(meta){for(const k in meta){const bytes=new TextEncoder().encode(k+"\x00"+meta[k]);chunks.push(_chunk(new Uint8Array([116,69,88,116]),bytes));}}
+  const scan=new Uint8Array(h*(1+w*2));let di=0,si=0;for(let y=0;y<h;y++){scan[di++]=0;for(let x=0;x<w;x++){const v=gray16[si++];scan[di++]=(v>>>8)&255;scan[di++]=v&255;}}
+  const z=_zlibStore(scan);chunks.push(_chunk(new Uint8Array([73,68,65,84]),z));chunks.push(_chunk(new Uint8Array([73,69,78,68]),null));
+  return _concat(chunks);
+}
+
+
+if(els.btnDownload){
+  els.btnDownload.addEventListener('click', ()=>{
+    if(!offscreen) return;
+    const w = offscreen.w, h = offscreen.h;
+    if(invMode && offscreen.gray16 && w && h){
+      try{
+        const metaOut = { invertColors: String(!!(document.getElementById('invertColors')&&document.getElementById('invertColors').checked)), 
+          fftSize: String(Number(els.fftSize.value)||0),
+          hop: String(Math.round((Number(els.fftSize.value)||0)/2)),
+          sampleRate: String((meta && meta.sampleRate) ? meta.sampleRate : 44100),
+          dynRange: String(Number(els.dynRange.value)||0),
+          dbOffset: "0",
+          scale: String(els.scale && els.scale.value || 'linear'),
+          freqScale: String(els.scale && els.scale.value || 'linear'),
+          minHz: String((els.scale && els.scale.value==='log') ? Math.max(1, Number(els.minHz.value)||1) : (Number(els.minHz.value)||0)),
+          maxHz: String(Number(els.maxHz.value)||0),
+          orientation: "low_at_bottom",
+          linear_gray: (els.scale && els.scale.value==="linear") ? "true" : "false",
+          bitdepth: "16"
+        };
+        // Add px/sec metadata aliases for inverter compatibility
+        const __pxps = String(Math.max(1, Math.round(Number(els.pxPerSec.value)||0)));
+        metaOut.pxPerSec = __pxps;
+        metaOut.px_per_sec = __pxps;
+        metaOut.pixels_per_second = __pxps;
+        metaOut.effPxPerSec = __pxps;
+
+        const inv16 = (document.getElementById('invertColors')?.checked)
+          ? (function(){ const a=offscreen.gray16; const c=new Uint16Array(a.length); for(let i=0;i<a.length;i++){ c[i] = 65535 - a[i]; } return c; })()
+          : offscreen.gray16;
+        const png = encodeGray16(w,h,inv16,metaOut);
+        const blob = new Blob([png], {type:'image/png'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.download='spectrogram_data16.png'; a.href=url; a.click();
+        setTimeout(()=>URL.revokeObjectURL(url), 2000);
+        return;
+      }catch(e){ console.warn('16-bit export failed, falling back to 8-bit', e); }
+    }
+    if(!(w>0 && h>0)) return;
+    const c = document.createElement('canvas'); c.width=w; c.height=h;
+    const cx = c.getContext('2d', { willReadFrequently: true }); try{ cx.imageSmoothingEnabled=false; }catch(_e){}
+    if(offscreen.gray8 && offscreen.gray8.length===w*h){
+      const rgba = new Uint8ClampedArray(w*h*4);
+      const invChk = document.getElementById('invertColors');
+      const invertNow = !!(invChk && invChk.checked);
+      for(let i=0,q=0;i<offscreen.gray8.length;i++,q+=4){ const vv=offscreen.gray8[i]; const v = invertNow ? (255 - vv) : vv; rgba[q]=v; rgba[q+1]=v; rgba[q+2]=v; rgba[q+3]=255; }
+      cx.putImageData(new ImageData(rgba,w,h),0,0);
+    }else if(offscreen.imageData){ cx.putImageData(offscreen.imageData,0,0); } else { return; }
+    const a = document.createElement('a'); a.download='spectrogram_data8.png'; a.href=c.toDataURL('image/png'); a.click();
+  });
+}
+
+
+    // Fresh-offscreen handler: drop cached grayscale when axes change
+    function onScaleChangedFreshOffscreen(){
+      if(window.offscreen){
+        offscreen.gray8 = null;
+        offscreen.gray16 = null;
+      }
+    }
+    if(els.scale){ els.scale.addEventListener('change', onScaleChangedFreshOffscreen); }
+    if(els.minHz){ els.minHz.addEventListener('change', onScaleChangedFreshOffscreen); }
+    if(els.maxHz){ els.maxHz.addEventListener('change', onScaleChangedFreshOffscreen); }
+    
+
+// Keep minHz valid when switching to log scale
+if(els.scale){
+  els.scale.addEventListener('change', ()=>{
+    const isLog = els.scale.value === 'log';
+    if(isLog){
+      if(Number(els.minHz.value) < 1){ els.minHz.value = '1'; }
+      els.minHz.min = '1';
+    }else{
+      els.minHz.min = '0';
+    }
+    // Clear cached offscreen so export fills from scratch
+    if(window.offscreen){ offscreen.gray8=null; offscreen.gray16=null; }
+  });
+}
+
+</script>
+</body>
+</html>
+
+  </template>
+  <template id="tpl-inverter">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SpectroGhost Inverter (User-Tunable)</title>
+  <style>
+    body{margin:0;padding:0;background:#111;color:#eee;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;display:flex;flex-direction:column;align-items:center;text-align:center}
+    h2{margin:16px 0 8px}
+    canvas{max-width:95vw;height:auto;margin:10px 0;background:#000;border:1px solid #222}
+    .controls{display:flex;flex-direction:column;align-items:center;width:92vw;max-width:760px}
+    .row{display:flex;flex-wrap:wrap;gap:10px 16px;justify-content:center;align-items:end;width:100%}
+    label{font-size:14px}
+    input[type="number"],select{background:#1a1a1a;border:1px solid #444;color:#eee;border-radius:6px;padding:6px 8px}
+    input[type="file"],button{margin:8px}
+    button{background:#2a2a2a;color:#eee;border:1px solid #444;border-radius:8px;padding:8px 12px;cursor:pointer}
+    button:hover{background:#333}
+    .debug{background:#222;padding:10px;margin-top:10px;width:92vw;max-width:760px;max-height:300px;overflow:auto;font-size:12px;border:1px solid #444;text-align:left;white-space:pre-wrap}
+    audio{width:100%;max-width:760px;margin:6px 0 12px}
+  </style>
+</head>
+<body>
+  <h2>SpectroGhost Inverter</h2>
+  <div class="controls">
+    <div class="row">
+      <input type="file" id="imageInput" accept="image/*" />
+      <label><input type="checkbox" id="reverseCheckbox" />Reverse audio</label>
+<label><input type="checkbox" id="invertColorsIn">Invert colors</label>
+<label><input type="checkbox" id="robustStroke">Manual Log Spectrogram</label>
+      <label id="preGainLabel">Preâ€‘iFFT gain <span id="preGainValue">1.0</span>x</label>
+      <input type="range" id="preGainSlider" min="0.01" max="3.0" step="0.01" value="1.0" />
+      <label id="postGainLabel">Postâ€‘iFFT gain <span id="postGainValue">1.0</span>x</label>
+      <input type="range" id="postGainSlider" min="0.1" max="3.0" step="0.1" value="1.0" />
+    </div>
+
+    <div class="row">
+      <label>marginLeft <input type="number" id="marginLeft" value="0" step="1"></label>
+      <!-- marginTop control removed for auto bottom align --><!-- auto bottom align forced in code -->
+      <label id="cropHeightLabel">cropHeight <input type="number" id="cropHeight" value="193" step="1"></label>
+      <label id="pxPerSecLabel">px/sec <input type="number" id="pxPerSec" value="47" step="1"></label>
+    </div>
+
+    <div class="row">
+      <label id="sampleRateLabel">sampleRate <input type="number" id="sampleRate" value="48000" min="8000" max="192000" step="1000"></label>
+      <label id="fftSizeLabel">fftSize <select id="fftSize" title="Must be a power of two"><option value="256">256</option><option value="512">512</option><option value="1024">1024</option><option value="2048" selected>2048</option><option value="4096">4096</option><option value="8192">8192</option></select></label>
+      <label id="minFreqLabel">minFreq Hz <input type="number" id="minFreq" value="0" step="1"></label>
+      <label id="maxFreqLabel">maxFreq Hz <input type="number" id="maxFreq" value="4500" step="1"></label>
+      <label id="freqScaleLabel">Frequency axis <select id="freqScale"><option value="linear" selected>Linear</option><option value="log">Log</option></select></label>
+    </div>
+
+    <div class="row">
+      <label><input type="checkbox" id="dbMap" checked />Brightness is dB-mapped</label>
+      <label id="dynRangeLabel">dynRange dB <input type="number" id="dynRange" value="40" min="10" max="140" step="1"></label>
+      <label>Phase method
+        <select id="phaseMethod">
+          <option value="running">Running-sine (fast)</option>
+          <option value="griffinlim" selected>Griffin-Lim</option>
+          <option value="pghi_like">PGHI (approx)</option>
+          <option value="pghi_true">PGHI (true)</option>
+        </select>
+      </label>
+      <label>Iterations <input type="number" id="iterations" value="24" min="1" max="50" step="1"></label>
+      <label style="display:none"><input type="checkbox" id="forceHalfHop" checked>Force 50% overlap (hop = fft/2)</label>
+    </div>
+
+    
+    <div class="row">
+      <label><input type="checkbox" id="applyFloor" checked>Apply low-level floor</label>
+      <label>Floor dB <input type="number" id="lowFloorDb" value="40" min="20" max="120" step="1"></label>
+      <label><input type="checkbox" id="applySmoothTime">Temporal smoothing (3-col)</label>
+      <label><input type="checkbox" id="applyRolloff" checked>High-end roll-off</label>
+      <label><input type="checkbox" id="postSmooth">Post-reconstruction smoother</label>
+      <label>Window ms <input type="number" id="postSmoothMs" value="10" min="1" max="200" step="1"></label>
+    </div>
+    
+    <div class="row">
+      <button id="invertBtn">Invert to audio</button>
+      <button id="downloadBtn" type="button" style="display:none">Download WAV</button>
+    </div>
+    <audio id="audioPlayer" controls></audio>
+  </div>
+
+  <canvas id="canvas"></canvas>
+  <div class="debug" id="log">Ready.</div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently:true });
+    ctx.imageSmoothingEnabled = false;
+
+    // sRGBâ†’linear conversion for 8-bit samples, to keep magnitudes consistent
+    /* sRGBâ†’linear lookup */
+    const __SRGB_TO_LINEAR = new Float32Array(256);
+    (function buildSRGBLUT(){
+      for(let i=0;i<256;i++){
+        const cs = i / 255;
+        __SRGB_TO_LINEAR[i] = (cs <= 0.04045) ? (cs / 12.92) : Math.pow((cs + 0.055) / 1.055, 2.4);
+      }
+    })();
+    function srgb8ToLinear01(u8){
+      return __SRGB_TO_LINEAR[(u8 & 255) >>> 0];
+    }
+    
+
+    const logEl = document.getElementById('log');
+    function log(m){
+  const msg = String(m).replace(/\\n/g, '\n');
+  if(logEl.textContent && !logEl.textContent.endsWith('\n')) logEl.textContent += '\n';
+  logEl.textContent += msg;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+    function setStatus(m){
+  const msg = String(m).replace(/\\n/g, '\n');
+  logEl.textContent = msg;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+    function yieldUI(){ return new Promise(r=>requestAnimationFrame(r)); }
+
+// Helper to read pre-iFFT gain from UI safely
+function __getPreGain(){
+  const el = document.getElementById('preGainSlider');
+  const v = el ? parseFloat(el.value) : 1.0;
+  return Number.isFinite(v) ? v : 1.0;
+}
+
+
+// --- FFT size validation (power-of-two) ---
+function isPow2(n){ return n>0 && (n & (n-1))===0; }
+function nearestPow2(n){
+  if(!isFinite(n) || n<=0) return 2048;
+  let p = 1; while(p<n) p<<=1;
+  const lower = p>>1;
+  // choose closer of lower or p
+  if(lower===0) return p;
+  return (n-lower <= p-n)? lower : p;
+}
+function enforceFFTInput(){
+  const el = document.getElementById('fftSize');
+  if(!el) return;
+  const raw = parseInt(el.value, 10);
+  if(!isPow2(raw)){
+    const fixed = nearestPow2(raw);
+    el.value = String(fixed);
+    if(typeof log === 'function') log(`FFT size must be a power of two. Adjusted to ${fixed}.`);
+  }
+}
+
+
+// === NaN / Infinity diagnostics helpers ===
+let __nanWarned = false;
+function anyBad(arr){
+  if(!arr) return false;
+  for(let i=0;i<arr.length;i++){
+    const v = arr[i];
+    if(!Number.isFinite(v) || Number.isNaN(v)) return true;
+  }
+  return false;
+}
+function warnNaNs(stage, notes){
+  if(__nanWarned) return;
+  __nanWarned = true;
+  const tips = [
+    "Confirm px/sec is nonzero and matches the PNG time scale.",
+    "Ensure minFreq is less than maxFreq and crop height matches the image rows.",
+    "If Brightness is dB mapped, keep it ON and try a smaller dynRange.",
+    "Use an FFT size that is a power of 2 and not much larger than about 2 times the crop height.",
+    "If using GL or PGHI, try fewer iterations to isolate issues.",
+    "Use dB offset 0 and make sure the sample rate matches the source."
+  ].join("\\n");
+  log(`Warning: invalid numeric values detected at ${stage}.\\n${notes||""}\\nHints:\\n${tips}`);
+}
+
+
+    const preGainSlider = document.getElementById('preGainSlider');
+const postGainSlider = document.getElementById('postGainSlider');
+const preGainValue = document.getElementById('preGainValue');
+const postGainValue = document.getElementById('postGainValue');
+preGainSlider.oninput = ()=> preGainValue.textContent = parseFloat(preGainSlider.value).toFixed(2);
+postGainSlider.oninput = ()=> postGainValue.textContent = parseFloat(postGainSlider.value).toFixed(1);
+
+
+// Double-click-to-reset handlers for common controls, using image or metadata defaults
+(function(){
+  function pxsecFromMeta(meta){
+    if(!meta) return null;
+    const keys = ['pxPerSec','px_per_sec','pixels_per_second','effPxPerSec','PxPerSec','Px_per_sec','Pixels_per_second','EffPxPerSec'];
+    for(const k of keys){
+      if(meta[k]!=null){
+        const v = Math.round(Number(meta[k])||0);
+        if(Number.isFinite(v) && v>0) return v;
+      }
+    }
+    return null;
+  }
+
+  // Postâ€‘iFFT gain -> 1.0
+  (function(){
+    const lab = document.getElementById('postGainLabel');
+    const slider = document.getElementById('postGainSlider');
+    const ro = document.getElementById('postGainValue');
+    if(lab && slider && ro){
+      lab.style.cursor='pointer';
+      lab.title='Double-click to reset to 1.0x';
+      lab.ondblclick = ()=>{ slider.value='1.0'; ro.textContent=parseFloat(slider.value).toFixed(1); };
+    }
+  })();
+
+  // cropHeight -> reset to current image height
+  (function(){
+    const lab = document.getElementById('cropHeightLabel');
+    const inp = document.getElementById('cropHeight');
+    if(lab && inp){
+      lab.style.cursor='pointer';
+      lab.title='Double-click to reset to image height';
+      lab.ondblclick = ()=>{
+        try{
+          const h = document.getElementById('canvas')?.height;
+          if(h && h>0){ inp.value = String(h); }
+        }catch(_e){}
+      };
+    }
+  })();
+
+  // px/sec -> reset to metadata value if present
+  (function(){
+    const lab = document.getElementById('pxPerSecLabel');
+    const inp = document.getElementById('pxPerSec');
+    if(lab && inp){
+      lab.style.cursor='pointer';
+      lab.title='Double-click to reset to metadata px/sec (if present)';
+      lab.ondblclick = ()=>{
+        const meta = window.__lastMeta;
+        const v = pxsecFromMeta(meta);
+        if(v!=null){ inp.value = String(v); }
+      };
+    }
+  })();
+
+  // sampleRate -> metadata sampleRate
+  (function(){
+    const lab = document.getElementById('sampleRateLabel');
+    const inp = document.getElementById('sampleRate');
+    if(lab && inp){
+      lab.style.cursor='pointer';
+      lab.title='Double-click to reset to metadata sample rate';
+      lab.ondblclick = ()=>{
+        const sr = Number(window.__lastMeta?.sampleRate);
+        if(Number.isFinite(sr) && sr>0){ inp.value = String(sr|0); }
+      };
+    }
+  })();
+
+  // fftSize -> metadata fftSize
+  (function(){
+    const lab = document.getElementById('fftSizeLabel');
+    const sel = document.getElementById('fftSize');
+    if(lab && sel){
+      lab.style.cursor='pointer';
+      lab.title='Double-click to reset to metadata FFT size';
+      lab.ondblclick = ()=>{
+        const n = Number(window.__lastMeta?.fftSize);
+        if(Number.isFinite(n) && n>0){
+          // If the exact value is not in the select, choose nearest power of two that exists
+          let v = String(n|0);
+          const options = Array.from(sel.options).map(o=>o.value);
+          if(!options.includes(v)){
+            const pow2 = (x)=> x>0 && (x & (x-1))===0;
+            let m = n;
+            if(!pow2(m)){ let p=1; while(p<m) p<<=1; const lo=p>>1; m = (m-lo<=p-m)? lo : p; }
+            v = String(m);
+            if(!options.includes(v)){
+              // Append option to preserve the value
+              const opt = document.createElement('option'); opt.value=v; opt.textContent=v; sel.appendChild(opt);
+            }
+          }
+          sel.value = v;
+        }
+      };
+    }
+  })();
+
+  // minFreq -> metadata minHz
+  (function(){
+    const lab = document.getElementById('minFreqLabel');
+    const inp = document.getElementById('minFreq');
+    if(lab && inp){
+      lab.style.cursor='pointer';
+      lab.title='Double-click to reset to metadata min frequency';
+      lab.ondblclick = ()=>{
+        const v = Number(window.__lastMeta?.minHz);
+        if(Number.isFinite(v) && v>=0){ inp.value = String(v); }
+      };
+    }
+  })();
+
+  // maxFreq -> metadata maxHz
+  (function(){
+    const lab = document.getElementById('maxFreqLabel');
+    const inp = document.getElementById('maxFreq');
+    if(lab && inp){
+      lab.style.cursor='pointer';
+      lab.title='Double-click to reset to metadata max frequency';
+      lab.ondblclick = ()=>{
+        const v = Number(window.__lastMeta?.maxHz);
+        if(Number.isFinite(v) && v>0){ inp.value = String(v); }
+      };
+    }
+  })();
+
+  // dynRange -> metadata dynRange
+  (function(){
+    const lab = document.getElementById('dynRangeLabel');
+    const inp = document.getElementById('dynRange');
+    if(lab && inp){
+      lab.style.cursor='pointer';
+      lab.title='Double-click to reset to metadata dynamic range';
+      lab.ondblclick = ()=>{
+        const v = Number(window.__lastMeta?.dynRange);
+        if(Number.isFinite(v) && v>0){ inp.value = String(v); }
+      };
+    }
+
+
+// Double-click to reset "Invert colors" from metadata
+(function(){
+  const el = document.getElementById('invertColorsIn');
+  const lab = el ? el.parentElement : null;
+  if(el && lab){
+    lab.style.cursor='pointer';
+    lab.title='Double-click to reset to metadata';
+    lab.ondblclick = ()=>{
+      const m = window.__lastMeta || {};
+      const v = (m.invertColors!=null) ? String(m.invertColors).toLowerCase() : null;
+      if(v===null) return;
+      el.checked = (v==='1'||v==='true');
+    };
+  }
+})();
+// Double-click to reset Frequency axis from metadata (freqScale or scale)
+(function(){
+  const lab = document.getElementById('freqScaleLabel');
+  const sel = document.getElementById('freqScale');
+  if(lab && sel){
+    lab.style.cursor='pointer';
+    lab.title='Double-click to reset to metadata frequency axis';
+    lab.ondblclick = ()=>{
+      const meta = window.__lastMeta || {};
+      const v = (meta.freqScale || meta.scale);
+      if(v && (v==='linear' || v==='log')) sel.value = v;
+    };
+  }
+})();
+
+  })();
+})();
+
+
+// Allow double-click on the label to reset Preâ€‘iFFT gain to 1.00x
+(function(){
+  const lab = document.getElementById('preGainLabel');
+  const slider = document.getElementById('preGainSlider');
+  const readout = document.getElementById('preGainValue');
+  if(lab && slider && readout){
+    lab.style.cursor = 'pointer';
+    lab.title = 'Double-click to reset to 1.00x';
+    lab.ondblclick = function(){
+      slider.value = '1.00';
+      readout.textContent = parseFloat(slider.value).toFixed(2);
+    };
+  }
+})();
+
+
+    document.getElementById('invertBtn').addEventListener('click', processImage);
+
+    
+async function processImage(){
+      // Safety: enforce FFT size is a power of two before processing
+      try{ enforceFFTInput(); }catch(_e){}
+      const _fftEl = document.getElementById('fftSize');
+      if(_fftEl){
+        const _v = parseInt(_fftEl.value,10);
+        if(!isPow2(_v)){
+          log('FFT size must be a power of two. Please choose 256, 512, 1024, 2048, 4096, ...');
+          return;
+        }
+      }
+
+      setStatus('Processing...');
+      const file = document.getElementById('imageInput').files[0];
+      if(!file){ alert('Please select an image'); return; }
+      const reverse = document.getElementById('reverseCheckbox').checked;
+      const preGain = parseFloat(preGainSlider.value);
+
+      // user-tunable values
+      const marginLeft = parseInt(document.getElementById('marginLeft').value,10) || 0;
+      const cropHeight = parseInt(document.getElementById('cropHeight').value,10) || 192;
+
+      // compute marginTop to bottom align automatically, ignoring the UI control
+      let marginTop = 0;
+      const pxPerSec = Math.max(1, parseFloat(document.getElementById('pxPerSec').value) || 47);
+      const sampleRate = Math.max(4000, parseInt(document.getElementById('sampleRate').value,10) || 44100);
+      const fftSize = Math.max(256, parseInt(document.getElementById('fftSize').value,10) || 1024);
+      const minFreq = Math.max(0, parseFloat(document.getElementById('minFreq').value) || 0);
+      const maxFreq = Math.max(minFreq+1, parseFloat(document.getElementById('maxFreq').value) || 4500);
+      const dbMap = document.getElementById('dbMap').checked;
+      const dynRange = parseFloat(document.getElementById('dynRange').value) || 40;
+      const phaseMethod = document.getElementById('phaseMethod').value;
+      const robustMode = !!(document.getElementById('robustStroke')?.checked);
+      const iterations = Math.max(1, parseInt(document.getElementById('iterations').value,10) || 12);
+      const forceHalfHop = document.getElementById('forceHalfHop').checked;
+      const applyFloor = document.getElementById('applyFloor')?.checked ?? true;
+      const lowFloorDb = parseFloat(document.getElementById('lowFloorDb')?.value) || 60;
+      const applySmoothTime = document.getElementById('applySmoothTime')?.checked ?? true;
+      const applyRolloff = document.getElementById('applyRolloff')?.checked ?? true;
+
+      // Load image
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = async ()=>{
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.imageSmoothingEnabled = false;
+
+    // sRGBâ†’linear conversion for 8-bit samples, to keep magnitudes consistent
+    /* sRGBâ†’linear lookup */
+    const __SRGB_TO_LINEAR = new Float32Array(256);
+    (function buildSRGBLUT(){
+      for(let i=0;i<256;i++){
+        const cs = i / 255;
+        __SRGB_TO_LINEAR[i] = (cs <= 0.04045) ? (cs / 12.92) : Math.pow((cs + 0.055) / 1.055, 2.4);
+      }
+    })();
+    function srgb8ToLinear01(u8){
+      return __SRGB_TO_LINEAR[(u8 & 255) >>> 0];
+    }
+    
+        ctx.drawImage(img, 0, 0);
+
+        const cropWidth = Math.max(1, canvas.width - marginLeft);
+        const rows = cropHeight;
+        const marginBottom = 0;
+        // Always bottom align the crop vertically
+        const y0 = Math.max(0, canvas.height - rows - marginBottom);
+
+        const duration = cropWidth / pxPerSec; // seconds
+        const hopFromPPS = Math.max(1, Math.round(sampleRate / pxPerSec));
+        let hop = hopFromPPS;
+        if (forceHalfHop) { hop = Math.max(1, Math.round(fftSize/2)); }
+        const effPxPerSec = sampleRate / hop;
+
+        log(`Trim: x ${marginLeft}..${marginLeft+cropWidth}, y ${y0}..${y0+rows}`);
+        log(`px/sec target ${pxPerSec.toFixed(2)}, effective ${effPxPerSec.toFixed(2)} (hop ${hop})`);
+        log(`fft ${fftSize}, min ${minFreq} Hz, max ${maxFreq} Hz, rows ${rows}`);
+        await yieldUI();
+
+        const imgData = ctx.getImageData(marginLeft, y0, cropWidth, rows);
+        const data = imgData.data;
+        const cols = cropWidth;
+
+        // read grayscale, use red channel for speed
+        const mags = new Float32Array(rows*cols);
+        const invertFlag = !!(document.getElementById('invertColorsIn')?.checked);
+        const robust = !!(document.getElementById('robustStroke')?.checked);
+        const ky = 0; // vertical half-kernel disabled for neighbors, 0 => current row only
+        for(let y=0;y<rows;y++){
+          const rowOff = y*cols;
+          for(let x=0;x<cols;x++){
+            if(!robust){
+              const idx = (y*cols + x)*4;
+              const r8 = data[idx];
+              let lin = srgb8ToLinear01(r8);
+              if(invertFlag) lin = 1 - lin;
+              mags[rowOff + x] = lin;
+              continue;
+            }
+            let agg = invertFlag ? 1.0 : 0.0;
+            for(let dy=-ky; dy<=ky; dy++){
+              const yy = y+dy; if(yy<0 || yy>=rows) continue;
+              const idx2 = (yy*cols + x)*4;
+              const r8b = data[idx2];
+              let linb = srgb8ToLinear01(r8b);
+              if(invertFlag) linb = 1 - linb;
+              if(invertFlag){ if(linb < agg) agg = linb; } else { if(linb > agg) agg = linb; }
+            }
+            mags[rowOff + x] = agg;
+          }
+          if(y%80===0){ log(`Row ${y}/${rows}`); await yieldUI(); }
+        }
+        if(robust) log('Robust stroke capture: single-row sampling (no yÂ±1 aggregation)');
+        log(`Matrix complete ${rows}x${cols}`);
+        log('Using sRGBâ†’linear pixel decoding');
+        if(document.getElementById('invertColorsIn')?.checked){ log('Pixel inversion: ON (using negative of image)'); }
+        if(anyBad(mags)) warnNaNs('magnitude matrix', 'Check dynRange and dB mapping');
+        log('Applied cleanup features (floor, smoothing, rolloff)');
+        if(applySmoothTime){
+          log('Applied temporal smoothing (3-column avg)');
+          for(let y=0;y<rows;y++){
+            const rowOff=y*cols;
+            let prev=mags[rowOff];
+            for(let x=1;x<cols-1;x++){
+              const cur=mags[rowOff+x];
+              const nxt=mags[rowOff+x+1];
+              mags[rowOff+x]=(prev+cur+nxt)/3;
+              prev=cur;
+            }
+          }
+        }
+        if(applyRolloff){
+          const rollBins=Math.floor(rows*0.05);
+          const win=new Float32Array(rows);
+          for(let k=0;k<rows;k++){
+            const f=(k>rows-rollBins)?0.5*(1-Math.cos(Math.PI*(rows-k)/rollBins)):1;
+            win[k]=f;
+            for(let c=0;c<cols;c++){ mags[k*cols+c]*=f; }
+          }
+          log('Applied 5% high-end roll-off');
+        }
+        if(applyFloor){
+          const minAmp = Math.pow(10, (-lowFloorDb)/20);
+          let zeroed=0;
+          for(let i=0;i<mags.length;i++){ if(mags[i]<minAmp){ mags[i]=0; zeroed++; } }
+          log(`Applied low-level floor (-${lowFloorDb} dB), muted ${zeroed} of ${mags.length}`);
+        }
+
+        if(dbMap){
+          // convert brightness->linear with dB map
+          log(`dBâ†’linear, dynRange ${dynRange} dB`);
+          for(let i=0;i<mags.length;i++){
+            const b = mags[i]; // 0..1, 1=0 dB
+            mags[i] = Math.pow(10, ((b - 1) * dynRange) / 20);
+          if(!Number.isFinite(mags[i])) { mags[i]=0; warnNaNs('dB to linear', 'Bad amplitude from pixel at index '+i); }
+          if (mags[i] < 1e-8) mags[i] = 0;
+          if(applyFloor){ const minAmp = Math.pow(10, (-lowFloorDb)/20); if(mags[i] < minAmp) mags[i] = 0; }
+          }
+        }
+
+
+        // frequency mapping to bins (linear or logarithmic row interpretation)
+        const posBins = Math.floor(fftSize/2);
+        let kMin = Math.max(0, Math.round(fftSize * (minFreq / sampleRate)));
+        let kMax = Math.min(posBins - 1, Math.round(fftSize * (maxFreq / sampleRate)));
+        if(kMax <= kMin) kMax = Math.min(posBins - 1, kMin + rows - 1);
+
+        const useLog = (document.getElementById('freqScale')?.value === 'log');
+        const rowToBin = new Int32Array(rows);
+        if(!useLog){
+          for(let y=0;y<rows;y++){
+            rowToBin[y] = kMin + (rows - 1 - y);
+            if(rowToBin[y] < 1) rowToBin[y] = 1;
+            if(rowToBin[y] >= posBins) rowToBin[y] = posBins - 1;
+          }
+        } else {
+          const minHz = Math.max(1e-3, minFreq);
+          const maxHz = Math.max(minHz*1.001, maxFreq);
+          for(let y=0;y<rows;y++){
+            const t = (rows - 1 - y) / Math.max(1, rows - 1);
+            const f = minHz * Math.pow(maxHz/minHz, t);
+            let k = Math.round((f * fftSize) / sampleRate);
+            if(k < 1) k = 1;
+            if(k >= posBins) k = posBins - 1;
+            rowToBin[y] = k;
+          }
+          kMin = rowToBin.reduce((a,b)=>Math.min(a,b), posBins-1);
+          kMax = rowToBin.reduce((a,b)=>Math.max(a,b), 1);
+        }
+        const usedSet = new Set();
+        for(let y=0;y<rows;y++) usedSet.add(rowToBin[y]);
+        const binList = Array.from(usedSet).sort((a,b)=>a-b);
+        const binToIdx = Object.create(null);
+        for(let i=0;i<binList.length;i++) binToIdx[binList[i]] = i;
+        const usedBins = binList.length;
+        const effMinHz = (kMin * sampleRate) / fftSize;
+        const effMaxHz = (kMax * sampleRate) / fftSize;
+        log(`${useLog ? 'Log' : 'Linear'} freq map ${effMinHz.toFixed(1)}..${effMaxHz.toFixed(1)} Hz across ${rows} rows â†’ ${usedBins} unique bins`);
+        log(`Bins k ${kMin}..${kMax} (used ${usedBins}), binHz ${(sampleRate/fftSize).toFixed(2)}`);
+
+
+
+        // Optional time reversal for GL/PGHI paths by flipping spectrogram columns
+        let magsWork = mags;
+        if(reverse){
+          magsWork = new Float32Array(rows*cols);
+          for(let y=0;y<rows;y++){
+            const rowOff = y*cols;
+            for(let x=0;x<cols;x++){
+              magsWork[rowOff + x] = mags[rowOff + (cols - 1 - x)];
+            }
+          }
+          log('Time reversal: columns flipped for GL/PGHI');
+        }
+        if(robustMode && phaseMethod !== 'running'){
+          log('Robust stroke capture only supports Running-sine synthesis. Please choose "Running-sine (fast)".');
+          alert('Robust stroke capture uses every row as a sine. Select "Running-sine (fast)" to proceed.');
+          return;
+        }
+        if(phaseMethod === 'griffinlim'){
+          log(`Griffin-Lim x ${iterations}`);
+          if (iterations < 8) log('Tip: Griffin-Lim usually needs 12â€“32 iterations for clear speech.');
+          log(`GL using rows=${rows}, kMin=${kMin}, kMax=${kMax}, hop=${hop}, fft=${fftSize}`);
+          let glSignal = await griffinLimReconstruct(magsWork, rows, cols, sampleRate, fftSize, hop, kMin, kMax, rowToBin, iterations, log);
+          log(`Smoother window set to ${document.getElementById('postSmoothMs')?.value||10} ms`);
+          await finalizeAudio(glSignal, sampleRate);
+          return;
+        } else if (phaseMethod === 'pghi_like') {
+          log(`PGHI (approx) with ${iterations} refinements`);
+          let pghiSignal = await pghiLikeReconstruct(magsWork, rows, cols, sampleRate, fftSize, hop, kMin, kMax, rowToBin, iterations, log);
+          log(`Smoother window set to ${document.getElementById('postSmoothMs')?.value||10} ms`);
+          await finalizeAudio(pghiSignal, sampleRate);
+          return;
+        } else if (phaseMethod === 'pghi_true') {
+          log(`PGHI (true) reconstruction`);
+          let pghiTrueSignal = await truePghiReconstruct(magsWork, rows, cols, sampleRate, fftSize, hop, kMin, kMax, rowToBin, iterations, log);
+          log(`Smoother window set to ${document.getElementById('postSmoothMs')?.value||10} ms`);
+          await finalizeAudio(pghiTrueSignal, sampleRate);
+          return;
+        } else if (phaseMethod === 'running') {
+          log('Running-sine synthesis');
+          if(robustMode){
+            // Robust stroke capture: ignore FFT bins, synthesize one sine per image row
+            const frame = Math.max(1, Math.round(sampleRate / pxPerSec)); // samples per column
+            const outLen = frame*(cols - 1) + frame;
+            const signal = new Float32Array(outLen);
+            const w = hannWindow(frame);
+            const phases = new Float32Array(rows); // track per-row phase for continuity
+            for(let y=0;y<rows;y++) phases[y]=0;
+            // Precompute row->frequency Hz according to selected axis
+            const useLog = (document.getElementById('freqScale')?.value === 'log');
+            const minHz = Math.max(1e-6, minFreq);
+            const maxHz = Math.max(minHz*1.001, maxFreq);
+            const rowHz = new Float32Array(rows);
+            for(let y=0;y<rows;y++){
+              const trow = (rows - 1 - y) / Math.max(1, rows - 1);
+              rowHz[y] = useLog ? (minHz * Math.pow(maxHz/minHz, trow)) : (minHz + trow*(maxHz - minHz));
+            }
+            for(let c=0;c<cols;c++){
+              const src = reverse ? (cols - 1 - c) : c;
+              const start = c*frame;
+              for(let y=0;y<rows;y++){
+                const a = mags[y*cols + src] * preGain;
+                if(a<=0) continue;
+                const f = rowHz[y];
+                const ph0 = phases[y];
+                for(let t=0;t<frame;t++){
+                  const idx = start + t;
+                  if(idx>=signal.length) break;
+                  const ph = ph0 + 2*Math.PI*f*(t/sampleRate);
+                  signal[idx] += a * Math.sin(ph) * w[t];
+                }
+                const sliceTime = frame / sampleRate;
+                phases[y] = (ph0 + 2*Math.PI*f*sliceTime) % (2*Math.PI);
+              }
+              if(c%50===0){ log(`Col ${c}/${cols}`); await yieldUI(); }
+            }
+            log(`Robust stroke capture ON, frame=${frame} samples (~${(1000*frame/sampleRate).toFixed(1)} ms per column)`);
+            log(`Smoother window set to ${document.getElementById('postSmoothMs')?.value||10} ms`);
+            await finalizeAudio(signal, sampleRate);
+          } else {
+            // Original bin-based running-sine using FFT bins
+            const outLen = hop*(cols - 1) + fftSize;
+            const signal = new Float32Array(outLen);
+            const w = (hop < fftSize) ? hannWindow(fftSize) : null;
+            const phases = new Float32Array(usedBins);
+            for(let b=0;b<usedBins;b++) phases[b]=0;
+            for(let c=0;c<cols;c++){
+              const src = reverse ? (cols - 1 - c) : c;
+              for(let y=0;y<rows;y++){
+                const k = rowToBin[y];
+                const bin = binToIdx[k];
+                const a = mags[y*cols + src] * preGain;
+                if(a<=0) continue;
+                const freq = (k * sampleRate) / fftSize;
+                const ph0 = phases[bin];
+                const start = c*hop;
+                for(let t=0;t<fftSize;t++){
+                  const idx = start + t;
+                  if(idx>=signal.length) break;
+                  const ph = ph0 + 2*Math.PI*freq*(t/sampleRate);
+                  const win = w ? w[t] : 1;
+                  signal[idx] += a * Math.sin(ph) * win;
+                }
+                const sliceTime = hop / sampleRate;
+                phases[bin] = (ph0 + 2*Math.PI*freq*sliceTime) % (2*Math.PI);
+              }
+              if(c%50===0){ log(`Col ${c}/${cols}`); await yieldUI(); }
+            }
+            log(`Smoother window set to ${document.getElementById('postSmoothMs')?.value||10} ms`);
+            await finalizeAudio(signal, sampleRate);
+          }
+        }
+      };
+      img.onerror = ()=> setStatus('Failed to load image');
+      img.src = url;
+    }
+
+    async function finalizeAudio(signal, sampleRate){
+      // Apply postâ€‘iFFT gain before metering/encode
+      const pgEl = document.getElementById('postGainSlider');
+      const postGain = pgEl ? parseFloat(pgEl.value) : 1.0;
+      if(postGain !== 1){ for(let i=0;i<signal.length;i++){ signal[i] *= postGain; } }
+
+      for(let i=0;i<signal.length;i++){ if(!Number.isFinite(signal[i]) || Number.isNaN(signal[i])) signal[i]=0; }
+      let peak=0; for(let i=0;i<signal.length;i++){ const a = Math.abs(signal[i]); if(a>peak) peak=a; }
+      if(peak>1) log(`Warning: peak ${peak.toFixed(3)} > 1.0, WAV will hard-clip. No normalization.`);
+      else log(`Peak ${peak.toFixed(3)} (no normalization)`);
+
+      if(document.getElementById('postSmooth').checked){
+        const sr = sampleRate;
+        const msEl = document.getElementById('postSmoothMs');
+        const ms = msEl ? Math.max(1, parseFloat(msEl.value)||10) : 10;
+        const win = Math.max(1, Math.round(sr * (ms/1000)));
+        log(`Applied post-reconstruction smoother (${ms} ms, window=${win} samples, zero-phase boxcar)`);
+        if(win > 1){
+          // Forward moving-average
+          const n = signal.length;
+          const tmp = new Float32Array(n);
+          let acc = 0;
+          for(let i=0;i<n;i++){
+            acc += signal[i];
+            if(i>=win) acc -= signal[i-win];
+            const denom = (i+1<win) ? (i+1) : win;
+            tmp[i] = acc / denom;
+          }
+          // Backward pass for zero-phase
+          const out = new Float32Array(n);
+          acc = 0;
+          for(let i=n-1, j=0;i>=0;i--, j++){
+            acc += tmp[i];
+            if(j>=win) acc -= tmp[i+win];
+            const denom = (j+1<win) ? (j+1) : win;
+            out[i] = acc / denom;
+          }
+          signal.set(out);
+        }
+      }
+      log('Encoding WAV...'); await yieldUI();
+      const wav = encodeWAV(signal, sampleRate);
+      const blob = new Blob([wav], {type:'audio/wav'});
+      const url = URL.createObjectURL(blob);
+      const a = document.getElementById('audioPlayer');
+      a.src = url; a.play().catch(()=>{});
+      const d = document.getElementById('downloadBtn');
+      d.dataset.url = url; d.style.display = 'inline-block';
+      log('Audio ready. Use the player or Download.');
+    }
+
+    // WAV writer
+    function encodeWAV(samples, sampleRate){
+      const numChannels=1, bps=2, blockAlign=numChannels*bps, byteRate=sampleRate*blockAlign;
+      const dataSize=samples.length*bps;
+      const buf=new ArrayBuffer(44+dataSize); const v=new DataView(buf);
+      function ws(o,s){ for(let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); }
+      ws(0,"RIFF"); v.setUint32(4,36+dataSize,true);
+      ws(8,"WAVE"); ws(12,"fmt "); v.setUint32(16,16,true);
+      v.setUint16(20,1,true); v.setUint16(22,1,true);
+      v.setUint32(24,sampleRate,true); v.setUint32(28,byteRate,true);
+      v.setUint16(32,blockAlign,true); v.setUint16(34,16,true);
+      ws(36,"data"); v.setUint32(40,dataSize,true);
+      let off=44; for(let i=0;i<samples.length;i++){ const s=Math.max(-1,Math.min(1,samples[i])); v.setInt16(off, s*32767, true); off+=2; }
+      return buf;
+    }
+
+    // Analysis helpers
+    function hannWindow(n){ const w=new Float32Array(n); for(let i=0;i<n;i++) w[i]=0.5*(1-Math.cos(2*Math.PI*i/(n-1))); return w; }
+    function fftRadix2(re, im, inverse=false){
+      const n=re.length;
+      for(let i=1,j=0;i<n;i++){
+        let bit=n>>1; for(; j & bit; bit>>=1) j^=bit; j^=bit;
+        if(i<j){ let tr=re[i]; re[i]=re[j]; re[j]=tr; tr=im[i]; im[i]=im[j]; im[j]=tr; }
+      }
+      for(let len=2; len<=n; len<<=1){
+        const ang=(inverse?2:-2)*Math.PI/len, wlenr=Math.cos(ang), wleni=Math.sin(ang);
+        for(let i=0;i<n;i+=len){
+          let wr=1, wi=0;
+          for(let k=0;k<(len>>1);k++){
+            const j=i+k, l=j+(len>>1);
+            const tr = wr*re[l] - wi*im[l];
+            const ti = wr*im[l] + wi*re[l];
+            re[l]=re[j]-tr; im[l]=im[j]-ti;
+            re[j]+=tr;      im[j]+=ti;
+            const wtmp=wr; wr=wlenr*wr - wleni*wi; wi=wlenr*wi + wleni*wtmp;
+          }
+        }
+      }
+      if(inverse){ for(let i=0;i<n;i++){ re[i]/=n; im[i]/=n; } }
+    }
+
+    function stft(signal, fftSize, hop){
+      const w = hannWindow(fftSize);
+      const frames = Math.max(1, Math.floor((signal.length - fftSize)/hop) + 1);
+      const spec = new Array(frames);
+      for(let f=0; f<frames; f++){
+        const start = f*hop;
+        const re = new Float32Array(fftSize);
+        const im = new Float32Array(fftSize);
+        for(let i=0;i<fftSize;i++){ re[i] = (signal[start+i]||0)*w[i]; im[i]=0; }
+        fftRadix2(re, im, false);
+        spec[f] = {re, im};
+      }
+      return {spec, fftSize, hop};
+    }
+
+    function istft(specObj, hop, outLen){
+      const {spec, fftSize} = specObj;
+      const w = hannWindow(fftSize);
+      const out = new Float32Array(outLen);
+      const norm = new Float32Array(outLen);
+      for(let f=0; f<spec.length; f++){
+        const re=spec[f].re.slice(), im=spec[f].im.slice();
+        fftRadix2(re, im, true);
+        const start = f*hop;
+        for(let i=0;i<fftSize;i++){
+          const s = re[i]*w[i];
+          out[start+i]+=s;
+          norm[start+i]+=w[i]*w[i];
+        }
+      }
+      for(let i=0;i<out.length;i++){ const d = norm[i]; out[i] = (d>1e-12)? (out[i]/d) : 0; }
+      if(anyBad(out)) warnNaNs('iSTFT output', 'NaN or Inf after overlap add');
+      return out;
+    }
+
+    
+    async function pghiLikeReconstruct(magRowsCols, rows, cols, fs, N, hop, kMin, kMax, rowToBin, iters, logFn){
+  const preGain = __getPreGain();
+
+      const posBins = Math.floor(N/2);
+      const frames = cols;
+      // Target magnitudes per frame
+      const target = new Array(frames);
+      for(let c=0;c<frames;c++){
+        const mag = new Float32Array(posBins);
+        for(let y=0;y<rows;y++){
+          const k = rowToBin[y]; // mapped from row to FFT bin (linear/log)
+          if(k>=0 && k<posBins){
+            const a = magRowsCols[y*cols + c];
+            if(a>mag[k]) mag[k]=a;
+          }
+        }
+        // Scale like in GL for our FFT normalization
+        const specScale = N / 2;
+        for(let k=0;k<posBins;k++){ mag[k] *= specScale; mag[k] *= preGain; }
+        if(applyRolloff){ const rollBins=Math.floor(posBins*0.05); const win=new Float32Array(posBins); for(let k=0;k<posBins;k++){ const f=(k>posBins-rollBins)?0.5*(1-Math.cos(Math.PI*(posBins-k)/rollBins)):1; win[k]=f; mag[k]*=win[k]; }  }
+        target[c]=mag;
+      }
+
+      // Coherent phase initialization: propagate per-bin phase across frames according to bin center frequency
+      const spec = new Array(frames);
+      const phases = new Float32Array(posBins);
+      for(let k=0;k<posBins;k++) phases[k]=0;
+      const binHz = fs / N;
+      const dt = hop / fs;
+
+      for(let c=0;c<frames;c++){
+        const re = new Float32Array(N);
+        const im = new Float32Array(N);
+        for(let k=0;k<posBins;k++){
+          const a = target[c][k];
+          const freq = k * binHz;
+          const ph = phases[k];
+          re[k] = a * Math.cos(ph);
+          im[k] = a * Math.sin(ph);
+          // advance phase for next frame
+          // Phase unwrapping continuity for PGHI
+let phNext = phases[k] + 2*Math.PI*freq*dt;
+if(phNext > Math.PI) phNext -= 2*Math.PI;
+if(phNext < -Math.PI) phNext += 2*Math.PI;
+phases[k] = phNext;
+        }
+        // Hermitian completion
+        im[0]=0; const ny = posBins; re[ny]=0; im[ny]=0;
+        for(let k=1;k<posBins;k++){ re[N-k]=re[k]; im[N-k] = -im[k]; }
+        spec[c] = {re, im};
+      }
+
+      // ISTFT from coherent init
+      const outLen = hop*(frames - 1) + N;
+      let signal = istft({spec, fftSize: N}, hop, outLen);
+      logFn && logFn("Applied PGHI phase unwrapping for continuity\nPGHI-like: coherent init done");
+
+      // Optional short GL refinement to enforce magnitudes strictly
+      const refine = Math.max(0, iters|0); // cap to keep snappy
+      for(let it=0; it<refine; it++){
+        if(anyBad(signal)) warnNaNs('PGHI-like refine '+(it+1), 'Signal contains invalid numbers');
+        const ana = stft(signal, N, hop);
+        for(let c=0;c<frames;c++){
+          const re=ana.spec[c].re, im=ana.spec[c].im;
+          for(let k=0;k<posBins;k++){
+            let ph = Math.atan2(im[k], re[k]);
+            // unwrap phase based on previous frame
+            const expected = (phases[k] + 2*Math.PI*(k*fs/N)*dt) % (2*Math.PI);
+            let diff = ph - expected;
+            if(diff > Math.PI) diff -= 2*Math.PI;
+            if(diff < -Math.PI) diff += 2*Math.PI;
+            ph = expected + diff;
+            phases[k] = ph;
+            const a = target[c][k];
+            re[k] = a*Math.cos(ph);
+            im[k] = a*Math.sin(ph);
+          }
+          for(let k=1;k<posBins;k++){ ana.spec[c].re[N-k]=ana.spec[c].re[k]; ana.spec[c].im[N-k]=-ana.spec[c].im[k]; }
+          ana.spec[c].im[0]=0; ana.spec[c].re[posBins]=0; ana.spec[c].im[posBins]=0;
+        }
+        signal = istft({spec: ana.spec, fftSize: N}, hop, outLen);
+        if(it%2===0){ logFn && logFn(`PGHI-like refine ${it+1}/${refine}`); await new Promise(r=>requestAnimationFrame(r)); }
+      }
+      return signal;
+    }
+    
+
+
+
+async function truePghiReconstruct(magsWork, rows, cols, fs, N, hop, kMin, kMax, rowToBin, iters, logFn){
+  const preGain = __getPreGain();
+  const posBins = Math.floor(N/2);
+  const frames = cols;
+
+  // 1) Build target magnitudes per frame exactly like GL/PGHI-like
+  const target = new Array(frames);
+  for(let c=0;c<frames;c++){
+    const mag = new Float32Array(posBins);
+    for(let y=0;y<rows;y++){
+      const k = rowToBin[y];
+      if(k>=0 && k<posBins){
+        const a = magsWork[y*cols + c];
+        if(a>mag[k]) mag[k]=a;
+      }
+    }
+    // Match GL scaling for our FFT normalization so time-domain level is correct
+    const specScale = N / 2;
+    for(let k=0;k<posBins;k++){ mag[k] *= specScale; mag[k] *= preGain; }
+    if (typeof applyRolloff !== 'undefined' && applyRolloff){
+      const rollBins=Math.floor(posBins*0.05);
+      for(let k=0;k<posBins;k++){
+        const f=(k>posBins-rollBins)?0.5*(1-Math.cos(Math.PI*(posBins-k)/rollBins)):1;
+        mag[k]*=f;
+      }
+    }
+    target[c]=mag;
+  }
+
+  logFn("PGHI (true): computing phase gradientsâ€¦");
+  await new Promise(r=>requestAnimationFrame(r));
+
+  // 2) Gradients of log-magnitude (central diffs)
+  const logMag = new Float32Array(rows*cols);
+  for(let i=0;i<magsWork.length;i++) logMag[i] = Math.log(magsWork[i] + 1e-9);
+
+  const dT = new Float32Array(rows*cols);
+  const dF = new Float32Array(rows*cols);
+  for(let y=0;y<rows;y++){
+    for(let x=1;x<cols-1;x++){
+      const idx = y*cols + x;
+      dT[idx] = (logMag[y*cols + x+1] - logMag[y*cols + x-1]) * 0.5;
+    }
+  }
+  for(let x=0;x<cols;x++){
+    for(let y=1;y<rows-1;y++){
+      const idx = y*cols + x;
+      dF[idx] = (logMag[(y+1)*cols + x] - logMag[(y-1)*cols + x]) * 0.5;
+    }
+  }
+
+  // 3) Phase gradient scaling, corrected for SpectroGhost linear orientation (top=high freq)
+  const dPhiT = new Float32Array(rows*cols);
+  const dPhiF = new Float32Array(rows*cols);
+  const twoPi = 2 * Math.PI;
+  const scaleT = twoPi * hop / N;
+  const scaleF = twoPi * N / hop;
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const idx = y * cols + x;
+      dPhiT[idx] = scaleT * dF[idx];
+      dPhiF[idx] = scaleF * dT[idx];
+    }
+  }
+
+  // 4) Heap-based integration over the image grid
+  logFn("Heap integration in progressâ€¦");
+  await new Promise(r=>requestAnimationFrame(r));
+
+  const phase = new Float32Array(rows*cols).fill(NaN);
+  const visited = new Uint8Array(rows*cols);
+  const heap = [];
+  const pushHeap = (idx, val)=>{ heap.push([val, idx]); };
+  for(let i=0;i<magsWork.length;i++) if(magsWork[i]>0) pushHeap(i, magsWork[i]);
+  heap.sort((a,b)=>b[0]-a[0]);
+  if(heap.length === 0){
+    logFn("PGHI: empty magnitude matrix.");
+    return new Float32Array();
+  }
+
+  // seed
+  const [seedVal, seedIdx] = heap[0];
+  phase[seedIdx] = 0;
+  visited[seedIdx] = 1;
+
+  const neighbors = [[1,0],[-1,0],[0,1],[0,-1]];
+  while (heap.length > 0) {
+    const [magVal, idx] = heap.shift();
+    if (isNaN(phase[idx])) continue;
+    const y = Math.floor(idx / cols);
+    const x = idx - y * cols;
+
+    for (const [dx, dy] of neighbors) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
+      const nidx = ny * cols + nx;
+      if (visited[nidx]) continue;
+
+      let phi = phase[idx];
+      if (dx !== 0) phi += dPhiT[idx] * dx;
+      if (dy !== 0) phi += dPhiF[idx] * dy;
+
+      phase[nidx] = phi;
+      visited[nidx] = 1;
+      heap.push([magsWork[nidx], nidx]);
+    }
+    heap.sort((a,b)=>b[0]-a[0]);
+  }
+  logFn(`Heap integration complete (${visited.reduce((a,b)=>a+b,0)} bins)`);
+
+  // 5) Assemble complex spectra using PGHI phase and *target* magnitudes
+  const spec = new Array(frames);
+  for(let c=0;c<frames;c++){
+    const re = new Float32Array(N);
+    const im = new Float32Array(N);
+    for(let y=0;y<rows;y++){
+      const k = rowToBin[y];
+      if(k<=0 || k>=posBins) continue;
+      const idx = y*cols + c;
+      const a = target[c][k];
+      const ph = phase[idx];
+      if (a > 0){
+        re[k] = a*Math.cos(ph);
+        im[k] = a*Math.sin(ph);
+      }
+    }
+    // Hermitian completion
+    im[0]=0; re[posBins]=0; im[posBins]=0;
+    for(let k=1;k<posBins;k++){ re[N-k]=re[k]; im[N-k]=-im[k]; }
+    spec[c] = {re, im};
+  }
+
+  // 6) ISTFT
+  logFn("ISTFT synthesisâ€¦");
+  const outLen = hop*(frames - 1) + N;
+  const signal = istft({spec, fftSize:N}, hop, outLen);
+  logFn("ISTFT synthesis done.");
+  return signal;
+}
+async function griffinLimReconstruct(magRowsCols, rows, cols, fs, N, hop, kMin, kMax, rowToBin, iters, logFn){
+  const preGain = __getPreGain();
+
+      const posBins = Math.floor(N/2);
+      const frames = cols;
+      const target = new Array(frames);
+      logFn && logFn(`GL target: frames ${frames}, posBins ${posBins}, k ${kMin}..${kMax}`);
+      for(let c=0;c<frames;c++){
+        let maxA = 0;
+        const mag = new Float32Array(posBins);
+        for(let y=0;y<rows;y++){
+          const k = rowToBin[y];
+          if(k>=0 && k<posBins){
+            const a = magRowsCols[y*cols + c];
+            if(a>mag[k]) mag[k]=a;
+            if(a>maxA) maxA=a;
+          }
+        }
+        const floorA = maxA * 1e-4;
+        for(let k=0;k<posBins;k++){ if(mag[k] < floorA) mag[k] = 0; }
+        const specScale = N / 2;
+        for(let k=0;k<posBins;k++){ mag[k] *= specScale; mag[k] *= preGain; }
+        if(applyRolloff){ const rollBins=Math.floor(posBins*0.05); const win=new Float32Array(posBins); for(let k=0;k<posBins;k++){ const f=(k>posBins-rollBins)?0.5*(1-Math.cos(Math.PI*(posBins-k)/rollBins)):1; win[k]=f; mag[k]*=win[k]; }  }
+        target[c]=mag;
+      }
+
+      // init random phase spectrum
+      const spec = new Array(frames);
+      for(let c=0;c<frames;c++){
+        let maxA = 0;
+        const re=new Float32Array(N), im=new Float32Array(N);
+        for(let k=0;k<posBins;k++){
+          const a = target[c][k];
+          const ph = 2*Math.PI*Math.random();
+          re[k]=a*Math.cos(ph); im[k]=a*Math.sin(ph);
+        }
+        im[0]=0; const ny=posBins; re[ny]=0; im[ny]=0;
+        for(let k=1;k<posBins;k++){ re[N-k]=re[k]; im[N-k]=-im[k]; }
+        spec[c]={re, im};
+      }
+
+      const outLen = hop*(frames - 1) + N;
+      let signal = istft({spec, fftSize: N}, hop, outLen);
+      logFn && logFn('Applied phase unwrapping for continuity');
+      const dt = hop / fs;
+      const phases = new Float32Array(posBins);
+      for(let it=0; it<iters; it++){
+        if(anyBad(signal)) warnNaNs('Griffin-Lim iteration '+(it+1), 'Signal contains invalid numbers');
+        const ana = stft(signal, N, hop);
+        for(let c=0;c<frames;c++){
+        let maxA = 0;
+          const re=ana.spec[c].re, im=ana.spec[c].im;
+          for(let k=0;k<posBins;k++){
+            let ph = Math.atan2(im[k], re[k]);
+            // unwrap phase based on previous frame
+            const expected = (phases[k] + 2*Math.PI*(k*fs/N)*dt) % (2*Math.PI);
+            let diff = ph - expected;
+            if(diff > Math.PI) diff -= 2*Math.PI;
+            if(diff < -Math.PI) diff += 2*Math.PI;
+            ph = expected + diff;
+            phases[k] = ph;
+            const a = target[c][k];
+            re[k]=a*Math.cos(ph); im[k]=a*Math.sin(ph);
+          }
+          for(let k=1;k<posBins;k++){ ana.spec[c].re[N-k]=ana.spec[c].re[k]; ana.spec[c].im[N-k]=-ana.spec[c].im[k]; }
+          ana.spec[c].im[0]=0; ana.spec[c].re[posBins]=0; ana.spec[c].im[posBins]=0;
+        }
+        signal = istft({spec: ana.spec, fftSize: N}, hop, outLen);
+        // log RMS
+        let rms=0; for(let i=0;i<signal.length;i++){ const s=signal[i]; rms+=s*s; } rms=Math.sqrt(rms/Math.max(1,signal.length));
+        logFn && logFn(`GL RMS after iter ${it+1}: ${rms.toFixed(4)}`);
+        if(it%2===0){ logFn && logFn(`Griffin-Lim iter ${it+1}/${iters}`); await yieldUI(); }
+      }
+      return signal;
+    }
+  
+// --- PNG tEXt reader and metadata applier ---
+async function readFileAsUint8(file){
+  return new Uint8Array(await file.arrayBuffer());
+}
+function readU32BE(u8, off){
+  return (u8[off]<<24) | (u8[off+1]<<16) | (u8[off+2]<<8) | (u8[off+3]);
+}
+function parsePngText(u8){
+  const out = {};
+  const sig = [137,80,78,71,13,10,26,10];
+  for(let i=0;i<8;i++){ if(u8[i]!==sig[i]) return out; }
+  // Read IHDR
+  let p = 8;
+  if(p+8 <= u8.length){
+    const lenIHDR = (u8[p]<<24)|(u8[p+1]<<16)|(u8[p+2]<<8)|u8[p+3]; p+=4;
+    const typeIHDR = String.fromCharCode(u8[p],u8[p+1],u8[p+2],u8[p+3]); p+=4;
+    if(typeIHDR==='IHDR' && p+lenIHDR <= u8.length){
+      const w = (u8[p]<<24)|(u8[p+1]<<16)|(u8[p+2]<<8)|u8[p+3];
+      const h = (u8[p+4]<<24)|(u8[p+5]<<16)|(u8[p+6]<<8)|u8[p+7];
+      out.__width = (w>>>0);
+      out.__height = (h>>>0);
+    }
+    p += lenIHDR + 4; // skip CRC
+  }
+  // Iterate remaining chunks
+  while(p+8 <= u8.length){
+    const len = (u8[p]<<24)|(u8[p+1]<<16)|(u8[p+2]<<8)|u8[p+3]; p+=4;
+    const type = String.fromCharCode(u8[p],u8[p+1],u8[p+2],u8[p+3]); p+=4;
+    if(type === 'tEXt' && p+len <= u8.length){
+      const data = u8.subarray(p, p+len);
+      const nul = data.indexOf(0);
+      if(nul>0){
+        const k = new TextDecoder('ascii').decode(data.subarray(0,nul));
+        const v = new TextDecoder('utf-8').decode(data.subarray(nul+1));
+        out[k] = v;
+      }
+    }
+    p += len + 4; // skip data + CRC
+    if(type === 'IEND') break;
+  }
+  return out;
+}
+function applySpectroMeta(metaMap){
+  try{ window.__lastMeta = Object.assign({}, metaMap); }catch(_e){}
+  // Map the known keys to inverter controls if present
+  const byId = (id)=>document.getElementById(id);
+  const setVal = (id, v)=>{ const el=byId(id); if(el){ el.value = String(v); } };
+  const setCheck = (id, on)=>{ const el=byId(id); if(el){ el.checked = !!on; } };
+
+  // Common ids guesswork based on existing UI names
+  // FFT size
+  if(metaMap.fftSize) setVal('fftSize', metaMap.fftSize);
+  // Half-hop enforced
+  setCheck('forceHalfHop', true);
+  // Window
+  if(metaMap.window && byId('windowType')) setVal('windowType', metaMap.window);
+  // Frequency scale and limits
+  if(metaMap.freqScale){ if(byId('freqScale')) setVal('freqScale', String(metaMap.freqScale)); }
+  else if(metaMap.scale){ if(byId('freqScale')) setVal('freqScale', String(metaMap.scale)); }
+  if(metaMap.minHz) setVal('minFreq', metaMap.minHz);
+  if(metaMap.maxHz) setVal('maxFreq', metaMap.maxHz);
+  if(metaMap.__height) setVal('cropHeight', metaMap.__height);
+  if(metaMap.invertColors!=null){ const v = String(metaMap.invertColors).toLowerCase(); const on = (v==='1'||v==='true'); const el=document.getElementById('invertColorsIn'); if(el) el.checked=on; }
+  // Dyn range and dB-map
+  if(metaMap.dynRange) setVal('dynRange', metaMap.dynRange);
+  setCheck('dbMap', true);
+  // px/sec aliases from SpectroGhost export
+  (function(){
+    const pxKeys = ['pxPerSec','px_per_sec','pixels_per_second','effPxPerSec','PxPerSec','Px_per_sec','Pixels_per_second','EffPxPerSec'];
+    for(const k of pxKeys){
+      if(metaMap && metaMap[k] != null){
+        const v = Math.max(1, Math.round(Number(metaMap[k])||0));
+        const el = document.getElementById('pxPerSec');
+        if(el && Number.isFinite(v) && v>0){
+          el.value = String(v);
+        }
+        break;
+      }
+    }
+  })();
+ // brightness is dB-mapped
+  if(metaMap.dbOffset) setVal('dbOffset', metaMap.dbOffset);
+  // Orient
+  if(metaMap.orientation && byId('orientation')) setVal('orientation', metaMap.orientation);
+  // Sample rate if UI allows, else leave for decoder
+  if(metaMap.sampleRate && byId('sampleRate')) setVal('sampleRate', metaMap.sampleRate);
+  // Turn off cleanups by default for faithful round-trip
+  setCheck('temporalSmooth', false);
+  setCheck('hiRollOff', false);
+  setCheck('lowFloor', false);
+
+  // Show banner
+  const banner = document.getElementById('metaBanner');
+  if(banner){ banner.style.display='block'; banner.textContent = 'Metadata loaded from PNG'; }
+
+  // Optionally trigger a recompute
+  if(typeof scheduleReconstruct === 'function'){ try{ scheduleReconstruct(200); }catch(_e){} }
+}
+
+
+// Read metadata as soon as a PNG is chosen and prefill controls
+(function(){
+  const ip = document.getElementById('imageInput');
+  if(!ip) return;
+  ip.addEventListener('change', async (ev)=>{
+    try{
+      const f = ev.target.files && ev.target.files[0];
+      if(!f) return;
+      const u8 = new Uint8Array(await f.arrayBuffer());
+      const meta = parsePngText(u8);
+      if(meta && Object.keys(meta).length){
+        console.log('[meta] PNG tEXt found', meta);
+        applySpectroMeta(meta);
+      } else {
+        console.log('[meta] no PNG tEXt found');
+      }
+    }catch(e){ console.warn('[meta] read failed', e); }
+  });
+})();
+
+
+// Show the full image as soon as it is selected
+(function(){
+  const ip = document.getElementById('imageInput');
+  if(!ip) return;
+  ip.addEventListener('change', async (ev)=>{
+    const file = ev.target.files && ev.target.files[0];
+    if(!file) return;
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = ()=>{
+      try{
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.imageSmoothingEnabled = false;
+
+    // sRGBâ†’linear conversion for 8-bit samples, to keep magnitudes consistent
+    /* sRGBâ†’linear lookup */
+    const __SRGB_TO_LINEAR = new Float32Array(256);
+    (function buildSRGBLUT(){
+      for(let i=0;i<256;i++){
+        const cs = i / 255;
+        __SRGB_TO_LINEAR[i] = (cs <= 0.04045) ? (cs / 12.92) : Math.pow((cs + 0.055) / 1.055, 2.4);
+      }
+    })();
+    function srgb8ToLinear01(u8){
+      return __SRGB_TO_LINEAR[(u8 & 255) >>> 0];
+    }
+    
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+        ctx.drawImage(img, 0, 0, img.width, img.height, 0, 0, canvas.width, canvas.height);
+      }finally{
+        URL.revokeObjectURL(url);
+      }
+    };
+    img.src = url;
+  });
+})();
+
+
+// Enforce power-of-two FFT size on input
+(function(){
+  const el = document.getElementById('fftSize');
+  if(el){
+    el.addEventListener('change', enforceFFTInput);
+    el.addEventListener('blur', enforceFFTInput);
+  }
+})();
+
+
+  // Hook up Download WAV button to trigger a programmatic download
+  (function(){
+    const __dlBtn = document.getElementById('downloadBtn');
+    if(__dlBtn && !__dlBtn.__bound){
+      __dlBtn.addEventListener('click', ()=>{
+        const url = __dlBtn.dataset && __dlBtn.dataset.url;
+        if(!url) { log('No audio available to download yet.'); return; }
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'spectroghost_inverted.wav';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      });
+      __dlBtn.__bound = true;
+    }
+  })();
+
+</script>
+
+<script>
+// Apply SpectroGhost metadata once on PNG load, without altering values on invert
+(function(){
+  const ip = document.getElementById('imageInput');
+  if(!ip) return;
+  ip.addEventListener('change', async (ev)=>{
+    try{
+      const f = ev.target.files && ev.target.files[0];
+      if(!f) return;
+      const buf = await f.arrayBuffer();
+      const meta = parsePngText(new Uint8Array(buf));
+      if(meta && Object.keys(meta).length){ applySpectroMeta(meta); }
+    }catch(e){ console.warn('metadata read failed on load', e); }
+  });
+})();
+</script>
+
+</body>
+</html>
+  </template>
+
+  <script>
+    function boot(){
+      const c = document.getElementById('frameCreate');
+      const i = document.getElementById('frameInvert');
+      const tc = document.getElementById('tpl-creator');
+      const ti = document.getElementById('tpl-inverter');
+      if(c && tc) c.srcdoc = tc.innerHTML;
+      if(i && ti) i.srcdoc = ti.innerHTML;
+    }
+    if(document.readyState !== 'loading') boot();
+    else document.addEventListener('DOMContentLoaded', boot);
+
+    const tabCreate = document.getElementById('tabCreate');
+    const tabInvert  = document.getElementById('tabInvert');
+    const paneCreate = document.getElementById('paneCreate');
+    const paneInvert = document.getElementById('paneInvert');
+    function show(which){
+      if(which==='create'){
+        paneCreate.classList.add('active'); paneInvert.classList.remove('active');
+        tabCreate.classList.add('active'); tabInvert.classList.remove('active');
+      } else {
+        paneCreate.classList.remove('active'); paneInvert.classList.add('active');
+        tabCreate.classList.remove('active'); tabInvert.classList.add('active');
+      }
+    }
+    tabCreate.onclick = ()=> show('create');
+    tabInvert.onclick  = ()=> show('invert');
   </script>
 </body>
 </html>
