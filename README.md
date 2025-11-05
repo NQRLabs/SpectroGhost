@@ -4,6 +4,8 @@
 
 **SpectroGhost** is a lightweight, browser-based spectrogram creator designed for analyzing and visualizing sound with high precision. It converts audio files into detailed, zoomable spectrograms, helping users reveal hidden sonic structures, embedded messages, and fine-grained frequency patterns — all locally, with no backend or uploads.
 
+[**View Live Demo**](nqrlabs.com/SpectroGhost/)
+
 ## Overview
 
 SpectroGhost performs real-time Short-Time Fourier Transform (STFT) analysis in the browser using a custom FFT engine.  
