@@ -465,18 +465,31 @@
        LICENSE FOOTER
        ============================================ */
     .license-footer {
+      width: 100%;
+      max-width: 760px;
+      border-top: 2px solid #3b528b;
       margin-top: auto;
-      margin-bottom: 20px;
-      padding: 10px;
-      font-size: 11px;
-      color: var(--dim);
+      margin-bottom: 0px;
+      padding: 10px 0px;
+      font-size: 0.68rem;
+      color: #a9a9b2;
       opacity: 0.7;
-      cursor: pointer;
-      transition: opacity 0.2s ease;
+      transition: opacity 0.3s ease;
+      text-align: center;
+      text-decoration: none;
     }
-
-    .license-footer:hover {
+    
+    .license-footer a {
+      color: #a9a9b2;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    
+    .license-footer a:hover { 
+      color: #97f3d2;
+      cursor: pointer;
       opacity: 1;
+      text-decoration: underline;
     }
 
     .license-modal {
@@ -495,6 +508,7 @@
       overflow-y: auto;
       box-shadow: 0 20px 60px rgba(0,0,0,.6);
       z-index: 1000;
+      text-align: left;
     }
 
     .license-modal.show {
@@ -513,7 +527,7 @@
       font-size: 11px;
       line-height: 1.5;
       color: var(--dim);
-      text-align: center;
+      text-align: left;
     }
 
     .license-modal-close {
@@ -530,6 +544,7 @@
 
     .license-overlay {
       display: none;
+      backdrop-filter: blur(4px);
       position: fixed;
       top: 0;
       left: 0;
@@ -774,16 +789,26 @@
   </div>
 
   <!-- License Footer -->
-  <div class="license-footer" id="licenseLink">
-    © 2025 NQR • Licensed under MIT • Click for details
+  <div style="width:100%; max-width:760px; display: flex; justify-content: center;">
+    <div class="license-footer">
+      <a href="https://youtube.com/@CLU-NQR" target="_blank">YouTube</a> &middot;
+      <a href="https://discord.gg/HT9YE8rvuN" target="_blank">Discord</a> &middot;
+      <a href="https://nqrlabs.com" target="_blank">NQR Labs</a> &middot;
+      <a href="https://github.com/NQRLabs" target="_blank">GitHub</a>
+      <br>
+      &copy; 2025 NQR &middot; <a id="licenseLink">License</a>
+    </div>
   </div>
 
   <!-- License Modal -->
   <div class="license-overlay" id="licenseOverlay"></div>
   <div class="license-modal" id="licenseModal">
     <span class="license-modal-close" id="licenseClose">&times;</span>
-    <h3>MIT License</h3>
-    <pre>Copyright (c) 2025 NQR
+    <h3>SpectroGhost License</h3>
+    <pre>
+SpectroGhost - MIT License
+
+Copyright &copy; 2025 NQR
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
