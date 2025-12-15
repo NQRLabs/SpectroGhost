@@ -1081,7 +1081,9 @@ SOFTWARE.</pre>
   function computeInvertible(){
     const sr = (meta && meta.sampleRate) || 48000;
     const N = Number(els.fftSize.value)||2048;
-    const hop = Math.max(1, Math.round(N/2));
+    // Use 75% overlap (hop = N/4) for much better reconstruction quality
+    // This eliminates the "fan wobble" artifact in Griffin-Lim
+    const hop = Math.max(1, Math.round(N/4));
     const maxHz = Number(els.maxHz.value)||Math.floor(sr/2);
     const minHz = Number(els.minHz.value);
     const bins = Math.max(1, Math.floor((maxHz - minHz) / (sr / N)));
@@ -1758,7 +1760,7 @@ SOFTWARE.</pre>
         colormap: String(els.colormap?.value || 'grayscale'),
         invertColors: String(!invNow),             // matches UI label now
         fftSize: String(Number(els.fftSize.value)||0),
-        hop: String(Math.round((Number(els.fftSize.value)||0)/2)),
+        hop: String(Math.round((meta?.sampleRate || 48000) / (Number(els.pxPerSec.value)||1))),
         sampleRate: String(meta?.sampleRate || 48000),
         dynRange: String(Number(els.dynRange.value)||0),
         scale: String(els.scale?.value || 'linear'),
