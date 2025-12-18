@@ -676,6 +676,14 @@
           <input type="number" id="pxPerSec" value="300" min="50" max="4000" step="10">
         </label>
 
+        <label>Overlap %
+          <select id="overlapPercent">
+            <option value="50">50% (min)</option>
+            <option value="75" selected>75% (recommended)</option>
+            <option value="87.5">87.5% (max)</option>
+          </select>
+        </label>
+
         <button id="btnMakeInvertible">Optimize</button>
       </div>
       
@@ -1048,6 +1056,7 @@ SOFTWARE.</pre>
     maxHz: document.getElementById('maxHz'),
     pxH: document.getElementById('pxH'),
     pxPerSec: document.getElementById('pxPerSec'),
+    overlapPercent: document.getElementById('overlapPercent'),
     colormap: document.getElementById('colormap'),
     btnMakeInvertible: document.getElementById('btnMakeInvertible'),
     btnRenderNow: document.getElementById('btnRenderNow'),
@@ -1081,9 +1090,9 @@ SOFTWARE.</pre>
   function computeInvertible(){
     const sr = (meta && meta.sampleRate) || 48000;
     const N = Number(els.fftSize.value)||2048;
-    // Use 75% overlap (hop = N/4) for much better reconstruction quality
-    // This eliminates the "fan wobble" artifact in Griffin-Lim
-    const hop = Math.max(1, Math.round(N/4));
+    // Get overlap from UI (default 75%)
+    const overlapPct = Number(els.overlapPercent?.value) || 75;
+    const hop = Math.max(1, Math.round(N * (1 - overlapPct / 100)));
     const maxHz = Number(els.maxHz.value)||Math.floor(sr/2);
     const minHz = Number(els.minHz.value);
     const bins = Math.max(1, Math.floor((maxHz - minHz) / (sr / N)));
@@ -1160,6 +1169,21 @@ SOFTWARE.</pre>
   if(els.scale){
     els.scale.addEventListener('change', ()=>{
       wasOptimized = false;
+    });
+  }
+
+  // Update px_per_sec when overlap changes
+  if(els.overlapPercent){
+    els.overlapPercent.addEventListener('change', ()=>{
+      if(audioBuffer && meta){
+        const sr = meta.sampleRate;
+        const N = Number(els.fftSize.value) || 2048;
+        const overlapPct = Number(els.overlapPercent.value);
+        const hop = Math.max(1, Math.round(N * (1 - overlapPct / 100)));
+        const pxPerSec = sr / hop;
+        els.pxPerSec.value = pxPerSec.toFixed(2);
+        scheduleRender();
+      }
     });
   }
 
