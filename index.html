@@ -684,6 +684,15 @@
           </select>
         </label>
 
+        <label>Window
+          <select id="windowFunction">
+            <option value="hann" selected>Hann</option>
+            <option value="hamming">Hamming</option>
+            <option value="blackman">Blackman</option>
+            <option value="rectangular">Rectangular</option>
+          </select>
+        </label>
+
         <button id="btnMakeInvertible">Optimize</button>
       </div>
       
@@ -837,18 +846,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.</pre>
   </div>
 
-  <!-- Scale Warning Modal -->
-  <div class="license-overlay" id="scaleWarningOverlay"></div>
-  <div class="license-modal" id="scaleWarningModal">
-    <span class="license-modal-close" id="scaleWarningClose">&times;</span>
-    <h3>Optimization Not Available</h3>
-    <p style="color: var(--dim); text-align: center; line-height: 1.6; margin: 20px 0;">
-      The "Optimize" feature is only available for <strong>Linear</strong> frequency scale.<br><br>
-      Perceptual scales (Log, Mel, Bark) compress frequency information non-uniformly, 
-      making perfect reconstruction optimization incompatible with reasonable image dimensions.<br><br>
-      To use optimization, please switch to <strong>Linear</strong> scale first.
-    </p>
-  </div>
   <script>
   "use strict";
   
@@ -915,6 +912,49 @@ SOFTWARE.</pre>
     const w = new Float32Array(N);
     for(let n=0; n<N; n++){
       w[n] = 0.5 * (1 - Math.cos(2*Math.PI*n/(N-1)));
+    }
+    return w;
+  }
+
+  /**
+   * Generate Hamming window for FFT analysis
+   * @param {number} N - Window length
+   * @returns {Float32Array} Hamming window coefficients
+   */
+  function hamming(N){
+    const w = new Float32Array(N);
+    for(let n=0; n<N; n++){
+      w[n] = 0.54 - 0.46 * Math.cos(2*Math.PI*n/(N-1));
+    }
+    return w;
+  }
+
+  /**
+   * Generate Rectangular window (no windowing)
+   * Provides narrowest main lobe (1 bin) but highest sidelobes (-13dB)
+   * Best for pure tones where you want single-pixel spectral lines
+   * @param {number} N - Window length
+   * @returns {Float32Array} Rectangular window coefficients (all 1s)
+   */
+  function rectangular(N){
+    const w = new Float32Array(N);
+    for(let n=0; n<N; n++){
+      w[n] = 1.0;
+    }
+    return w;
+  }
+
+  /**
+   * Generate Blackman window
+   * Wider main lobe (~6 bins) but excellent sidelobe suppression (-58dB)
+   * Very clean for tonal analysis with minimal spectral leakage
+   * @param {number} N - Window length
+   * @returns {Float32Array} Blackman window coefficients
+   */
+  function blackman(N){
+    const w = new Float32Array(N);
+    for(let n=0; n<N; n++){
+      w[n] = 0.42 - 0.5 * Math.cos(2*Math.PI*n/(N-1)) + 0.08 * Math.cos(4*Math.PI*n/(N-1));
     }
     return w;
   }
@@ -1057,6 +1097,7 @@ SOFTWARE.</pre>
     pxH: document.getElementById('pxH'),
     pxPerSec: document.getElementById('pxPerSec'),
     overlapPercent: document.getElementById('overlapPercent'),
+    windowFunction: document.getElementById('windowFunction'),
     colormap: document.getElementById('colormap'),
     btnMakeInvertible: document.getElementById('btnMakeInvertible'),
     btnRenderNow: document.getElementById('btnRenderNow'),
@@ -1085,20 +1126,51 @@ SOFTWARE.</pre>
   
   /**
    * Compute invertible layout parameters
+   * For all scales, height = FFT bin count ensures no frequency detail is lost.
+   * For perceptual scales (Mel/Log/Bark), this means low frequencies get extra
+   * resolution (redundant but lossless), while high frequencies are preserved.
    * @returns {Object} Invertible parameters
    */
   function computeInvertible(){
     const sr = (meta && meta.sampleRate) || 48000;
     const N = Number(els.fftSize.value)||2048;
+    const scale = els.scale ? els.scale.value : 'linear';
     // Get overlap from UI (default 75%)
     const overlapPct = Number(els.overlapPercent?.value) || 75;
     const hop = Math.max(1, Math.round(N * (1 - overlapPct / 100)));
     const maxHz = Number(els.maxHz.value)||Math.floor(sr/2);
     const minHz = Number(els.minHz.value);
-    const bins = Math.max(1, Math.floor((maxHz - minHz) / (sr / N)));
-    const height = bins;
+
+    // Calculate number of FFT bins in the frequency range
+    const kMin = Math.ceil(minHz * N / sr);
+    const kMax = Math.floor(maxHz * N / sr);
+    const bins = Math.max(1, kMax - kMin + 1);
+
+    let height;
+    if(scale === 'linear' || scale === 'log') {
+      // For linear and log: use exact FFT bin count
+      height = bins;
+    } else if(scale === 'mel') {
+      // For Mel: use Mel range, but cap at bin count for practical file sizes
+      // Mel range gives natural perceptual resolution
+      const melRange = Math.ceil(hzToMel(maxHz) - hzToMel(Math.max(1, minHz)));
+      // Use the smaller of: Mel range or FFT bin count
+      // Mel range is often smaller and more practical
+      height = Math.min(melRange, bins);
+      // Ensure minimum of 64 for usable resolution
+      height = Math.max(64, height);
+    } else if(scale === 'bark') {
+      // For Bark: ~24 bands cover the full range, but use more for detail
+      const barkRange = Math.ceil(hzToBark(maxHz) - hzToBark(Math.max(1, minHz)));
+      // Bark range is small (0-24), so multiply by ~10 for practical resolution
+      height = Math.min(barkRange * 10, bins);
+      height = Math.max(64, height);
+    } else {
+      height = bins;
+    }
+
     const pxPerSec = sr / hop;
-    return {sr, N, hop, minHz, maxHz, height, pxPerSec};
+    return {sr, N, hop, minHz, maxHz, height, pxPerSec, scale, bins};
   }
 
   /**
@@ -1115,17 +1187,23 @@ SOFTWARE.</pre>
     scheduleRender();
   }
   
-  // Make Invertible button handler
+  // Make Invertible button handler - works for all scales
   if(els.btnMakeInvertible){
     els.btnMakeInvertible.addEventListener('click', ()=>{
-      const currentScale = els.scale ? els.scale.value : 'linear';
-      if(currentScale !== 'linear'){
-        // Show warning modal for non-linear scales
-        if(window.showScaleWarning) window.showScaleWarning();
-        return;
-      }
+      const inv = computeInvertible();
       applyInvertibleOnce();
-      els.status.textContent = 'Optimized dimensions set';
+      // Show scale-specific status message
+      if(inv.scale === 'linear') {
+        els.status.textContent = `Optimized: ${inv.height} rows (1:1 FFT bins)`;
+      } else if(inv.scale === 'mel') {
+        els.status.textContent = `Optimized for Mel: ${inv.height} rows (${inv.bins} FFT bins)`;
+      } else if(inv.scale === 'bark') {
+        els.status.textContent = `Optimized for Bark: ${inv.height} rows (${inv.bins} FFT bins)`;
+      } else if(inv.scale === 'log') {
+        els.status.textContent = `Optimized for Log: ${inv.height} rows (1:1 FFT bins)`;
+      } else {
+        els.status.textContent = 'Optimized dimensions set';
+      }
     });
   }
   
@@ -1261,8 +1339,13 @@ SOFTWARE.</pre>
     
     if(!audioBuffer) return;
     
-    // Check if job is large
-    const w = Math.ceil(meta.duration * Number(els.pxPerSec.value));
+    // Check if job is large (estimate frame count using same formula as render)
+    const fftSize = Number(els.fftSize.value) || 2048;
+    const overlapPct = Number(els.overlapPercent?.value) || 75;
+    const hop = Math.max(1, Math.round(fftSize * (1 - overlapPct / 100)));
+    const samples = Math.round(meta.duration * meta.sampleRate);
+    const estimatedFrames = Math.max(1, Math.floor((samples - fftSize)/hop) + 1);
+    const w = estimatedFrames;
     const h = Number(els.pxH.value);
     const isHeavy = (w*h > 4000000);
     
@@ -1285,7 +1368,7 @@ SOFTWARE.</pre>
   }
   
   // Auto-schedule on parameter changes
-  ['fftSize','dynRange','scale','minHz','maxHz','pxH','pxPerSec'].forEach(id=>{
+  ['fftSize','dynRange','scale','minHz','maxHz','pxH','pxPerSec','windowFunction'].forEach(id=>{
     if(els[id]){
       els[id].addEventListener('change', ()=>{
         if(audioBuffer) scheduleRender();
@@ -1304,7 +1387,8 @@ SOFTWARE.</pre>
     
     // Get parameters
     const fftSize = Number(els.fftSize.value);
-    const hop = Math.round(fftSize/2);
+    const overlapPct = Number(els.overlapPercent?.value) || 75;
+    const hop = Math.max(1, Math.round(fftSize * (1 - overlapPct / 100)));
     const dynRange = Number(els.dynRange.value);
     const scaleType = els.scale.value;
     const nyquist = meta.sampleRate/2;
@@ -1331,8 +1415,20 @@ SOFTWARE.</pre>
       mono[i] /= audioBuffer.numberOfChannels;
     }
     
+    // Get window function
+    const windowType = els.windowFunction?.value || 'hann';
+    let window;
+    if(windowType === 'hamming') {
+      window = hamming(fftSize);
+    } else if(windowType === 'blackman') {
+      window = blackman(fftSize);
+    } else if(windowType === 'rectangular') {
+      window = rectangular(fftSize);
+    } else {
+      window = hann(fftSize);
+    }
+
     // Compute STFT
-    const window = hann(fftSize);
     const frames = Math.floor((mono.length - fftSize)/hop)+1;
     const bins = fftSize/2+1;
     
@@ -1351,7 +1447,7 @@ SOFTWARE.</pre>
         mag[f*bins+b] = Math.sqrt(re[b]*re[b] + im[b]*im[b]);
       }
     }
-    
+
     // Find global max
     let globalMax = 0;
     for(let i=0; i<mag.length; i++){
@@ -1386,15 +1482,14 @@ SOFTWARE.</pre>
       }
     }
     
-    // Resample to image dimensions
-    const w = Math.ceil(meta.duration * pxPerSec);
+    // Use exact STFT frame count as image width (no resampling = perfect invertibility)
+    const w = frames;
     const h = pxH;
     const gray8 = new Uint8ClampedArray(w*h);
-    
-    // Resample columns
+
+    // Direct 1:1 mapping from STFT frames to image columns
     for(let x=0; x<w; x++){
-      const t = (x/w)*meta.duration;
-      const frameIdx = Math.min(Math.floor(t/(hop/meta.sampleRate)), frames-1);
+      const frameIdx = x; // Direct mapping, no resampling
       
       for(let y=0; y<h; y++){
         // Map y to frequency
@@ -1420,9 +1515,22 @@ SOFTWARE.</pre>
           hz = effMinHz + (h-1-y)/(h-1)*(effMaxHz-effMinHz);
         }
         const binFloat = (hz/nyquist)*(bins-1);
-        const binIdx = Math.min(Math.max(Math.floor(binFloat), 0), bins-1);
-        
-        const db = magDB[frameIdx*bins + binIdx];
+        const binIdx = Math.min(Math.max(Math.floor(binFloat), 0), bins-2);
+        const frac = Math.min(binFloat - binIdx, 1); // Clamp to prevent extrapolation at edges
+
+        // Use nearest-neighbor when optimized (1:1 bin mapping) for sharper spectral lines
+        // Use linear interpolation otherwise for smoother low frequencies
+        let db;
+        if(wasOptimized) {
+          // Nearest-neighbor: pick the closer bin
+          const nearestBin = (frac < 0.5) ? binIdx : Math.min(binIdx + 1, bins - 1);
+          db = magDB[frameIdx*bins + nearestBin];
+        } else {
+          // Linear interpolation between adjacent bins
+          const db1 = magDB[frameIdx*bins + binIdx];
+          const db2 = magDB[frameIdx*bins + binIdx + 1];
+          db = db1 + frac * (db2 - db1);
+        }
         const norm = Math.max(0, Math.min(1, (db+dynRange)/dynRange));
         
         gray8[y*w+x] = Math.round(norm*255);
@@ -1431,13 +1539,18 @@ SOFTWARE.</pre>
     
     // Store offscreen data
     offscreen = { w, h, gray8 };
-    
+
+    // Update pxPerSec to show true value based on hop (sampleRate / hop)
+    // This ensures ReSounder can accurately reconstruct timing
+    const actualPxPerSec = meta.sampleRate / hop;
+    els.pxPerSec.value = actualPxPerSec.toFixed(2);
+
     // Render to canvas
     renderOffscreenToCanvas();
-    
+
     // Enable download
     els.btnDownload.disabled = false;
-    els.status.textContent = `Rendered: ${w}x${h} px`;
+    els.status.textContent = `Rendered: ${w}x${h} px (${actualPxPerSec.toFixed(1)} px/sec)`;
   }
   
   /* ============================================
@@ -1780,19 +1893,29 @@ SOFTWARE.</pre>
         rgba[i*4+3] = 255;
       }
       
+      // Calculate hop using same formula as rendering
+      const fftSizeVal = Number(els.fftSize.value) || 2048;
+      const overlapPctVal = Number(els.overlapPercent?.value) || 75;
+      const hopVal = Math.max(1, Math.round(fftSizeVal * (1 - overlapPctVal / 100)));
+
       const metaOut = {
         colormap: String(els.colormap?.value || 'grayscale'),
         invertColors: String(!invNow),             // matches UI label now
-        fftSize: String(Number(els.fftSize.value)||0),
-        hop: String(Math.round((meta?.sampleRate || 48000) / (Number(els.pxPerSec.value)||1))),
+        fftSize: String(fftSizeVal),
+        hop: String(hopVal),
+        overlapPercent: String(overlapPctVal),
+        windowType: String(els.windowFunction?.value || 'hann'),
         sampleRate: String(meta?.sampleRate || 48000),
         dynRange: String(Number(els.dynRange.value)||0),
         scale: String(els.scale?.value || 'linear'),
+        melType: 'htk',  // SpectroGhost uses HTK Mel formula
         minHz: String(Number(els.minHz.value)||0),
         maxHz: String(Number(els.maxHz.value)||0),
         pxPerSec: String(Number(els.pxPerSec.value)||0),
         optimized: String(wasOptimized),
-        duration_sec: String(meta?.duration?.toFixed(6)||'0')
+        duration_sec: String(meta?.duration?.toFixed(6)||'0'),
+        __height: String(h),
+        __width: String(w)
       };
       
       const png = encodeRGBA8(w, h, rgba, metaOut);
@@ -1847,29 +1970,6 @@ SOFTWARE.</pre>
       licenseLink.addEventListener('click', showLicense);
       licenseClose.addEventListener('click', hideLicense);
       licenseOverlay.addEventListener('click', hideLicense);
-    })();
-  </script>
-  <!-- Scale Warning Modal Handler Script -->
-  <script>
-    (function(){
-      const scaleWarningModal = document.getElementById('scaleWarningModal');
-      const scaleWarningOverlay = document.getElementById('scaleWarningOverlay');
-      const scaleWarningClose = document.getElementById('scaleWarningClose');
-  
-      if(!scaleWarningModal || !scaleWarningOverlay || !scaleWarningClose) return;
-  
-      window.showScaleWarning = function() {
-        scaleWarningModal.classList.add('show');
-        scaleWarningOverlay.classList.add('show');
-      };
-  
-      function hideScaleWarning() {
-        scaleWarningModal.classList.remove('show');
-        scaleWarningOverlay.classList.remove('show');
-      }
-  
-      scaleWarningClose.addEventListener('click', hideScaleWarning);
-      scaleWarningOverlay.addEventListener('click', hideScaleWarning);
     })();
   </script>
 </body>

@@ -16,24 +16,26 @@ Every operation runs client-side using Web Audio and Canvas APIs, making Spectro
 
 ## Features
 
-- **High-resolution STFT rendering:** Choose FFT size, hop size, and dynamic range.  
-- **Multiple frequency scales:** Linear, log, mel, and bark scaling for flexible analysis.  
-- **Colormap selection:** Switch between grayscale, viridis, plasma, inferno, magma, jet, hot, cool, and parula gradients.  
-- **Interactive exploration:** Zoom with Ctrl + scroll, drag to pan, and double-click to reset.  
-- **Invertible mode:** Automatically computes pixel-perfect dimensions for reversible audio processing.  
-- **Metadata embedding:** Exports PNGs containing analysis parameters in `tEXt` fields for seamless round-tripping with tools like ReSounder.  
-- **Offline operation:** No network connection required; runs entirely in the browser.  
-- **Precision export:** Generates true-color 8-bit PNGs using a built-in encoder for maximum fidelity.
+- **High-resolution STFT rendering:** Choose FFT size, hop size, and dynamic range.
+- **Multiple frequency scales:** Linear, log, mel, and bark scaling for flexible analysis.
+- **Window function selection:** Choose Hann, Hamming, Blackman, or Rectangular windows for different spectral characteristics.
+- **Colormap selection:** Switch between grayscale, viridis, plasma, inferno, magma, jet, hot, cool, and parula gradients.
+- **Interactive exploration:** Zoom with Ctrl + scroll, drag to pan, and double-click to reset.
+- **Optimize for reconstruction:** Automatically computes pixel-perfect dimensions for all frequency scales, enabling reversible audio processing with ReSounder.
+- **Metadata embedding:** Exports PNGs containing analysis parameters (including window type and mel formula) in `tEXt` fields for seamless round-tripping.
+- **Offline operation:** No network connection required; runs entirely in the browser.
+- **Precision export:** Generates true-color 8-bit PNGs using a built-in encoder with nearest-neighbor interpolation for optimized outputs.
 
 ## Technical Notes
 
 ### Processing Framework
 
-- **STFT Analysis:** Uses a Hann window and custom radix-2 FFT implementation for efficient in-browser transforms.  
-- **Frequency Scales:** Supports perceptual (mel, bark) and mathematical (log, linear) frequency mappings.  
-- **Dynamic Range Compression:** Converts magnitude to decibels with user-defined range and floor.  
-- **Colormaps:** Built-in 256-entry RGBA lookup tables for consistent visualization across color modes.  
-- **PNG Encoding:** Encodes spectrograms to valid 8-bit RGBA PNGs with metadata and CRC32 validation — implemented entirely in JavaScript.  
+- **STFT Analysis:** Custom radix-2 FFT implementation with selectable window functions (Hann, Hamming, Blackman, Rectangular).
+- **Frequency Scales:** Supports perceptual (mel, bark) and mathematical (log, linear) frequency mappings with scale-aware optimization.
+- **Dynamic Range Compression:** Converts magnitude to decibels with user-defined range and floor.
+- **Colormaps:** Built-in 256-entry RGBA lookup tables for consistent visualization across color modes.
+- **PNG Encoding:** Encodes spectrograms to valid 8-bit RGBA PNGs with comprehensive metadata (FFT size, hop, window type, mel formula, scale, etc.) and CRC32 validation — implemented entirely in JavaScript.
+- **Interpolation:** Bilinear interpolation for standard output; nearest-neighbor for optimized exports to preserve bin accuracy.
 - **Interactivity:** Canvas rendering updates dynamically with hardware-accelerated zoom and pan.
 
 ### Web API Usage
