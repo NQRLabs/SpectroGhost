@@ -392,6 +392,20 @@
       transform: none;
     }
 
+    button.recording {
+      background: #ff4444;
+      border-color: #cc3333;
+      animation: rec-pulse 1s ease-in-out infinite;
+    }
+    button.recording:hover:not(:disabled) {
+      background: #ee3333;
+      border-color: #cc3333;
+    }
+    @keyframes rec-pulse {
+      0%, 100% { box-shadow: 0 2px 4px rgba(255, 68, 68, 0.3); }
+      50% { box-shadow: 0 2px 12px rgba(255, 68, 68, 0.6); }
+    }
+
     /* ============================================
        SPECTROGRAM DISPLAY
        ============================================ */
@@ -622,8 +636,10 @@
     <!-- File Input -->
     <div class="control-section">
       <h3>🎵 Audio Input</h3>
-      <div class="row">
+      <div class="row" style="align-items: center; gap: 10px; flex-wrap: wrap;">
         <input type="file" id="fileIn" accept="audio/*">
+        <button id="btnRecord" type="button">⏺ Record</button>
+        <span id="recTimer" style="display:none; font-variant-numeric: tabular-nums; color: #ff6666;">0:00</span>
       </div>
     </div>
 
@@ -1200,7 +1216,9 @@ SOFTWARE.</pre>
     specWrap: document.getElementById('specWrap'),
     cSpec: document.getElementById('specCanvas'),
     pxHLabel: document.getElementById('pxHLabel'),
-    pxPerSecLabel: document.getElementById('pxPerSecLabel')
+    pxPerSecLabel: document.getElementById('pxPerSecLabel'),
+    btnRecord: document.getElementById('btnRecord'),
+    recTimer: document.getElementById('recTimer')
   };
   
   /* ============================================
@@ -1211,6 +1229,13 @@ SOFTWARE.</pre>
   let offscreen = null;
   let zoomX = 1, zoomY = 1;
   let wasOptimized = false;
+  let mediaRecorder = null;
+  let recordedChunks = [];
+  let recTimerInterval = null;
+  let liveAnalyser = null;
+  let liveAudioCtx = null;
+  let liveAnimFrame = null;
+  let liveColumn = 0;
   
   /* ============================================
      INVERTIBLE MODE FUNCTIONS
@@ -1420,7 +1445,175 @@ SOFTWARE.</pre>
       }
     });
   }
-  
+
+  /* ============================================
+     LIVE SPECTROGRAM VISUALIZATION
+     ============================================ */
+  function startLiveSpectrogram(stream){
+    liveAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = liveAudioCtx.createMediaStreamSource(stream);
+    liveAnalyser = liveAudioCtx.createAnalyser();
+    liveAnalyser.fftSize = Number(els.fftSize.value) || 2048;
+    liveAnalyser.smoothingTimeConstant = 0;
+    source.connect(liveAnalyser);
+
+    const bins = liveAnalyser.frequencyBinCount;
+    const canvasW = 800;
+    els.cSpec.width = canvasW;
+    els.cSpec.height = bins;
+    const ctx = els.cSpec.getContext('2d', {willReadFrequently: true});
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvasW, bins);
+    liveColumn = 0;
+
+    const dataArray = new Float32Array(bins);
+    const dynRange = Number(els.dynRange.value) || 80;
+    const invertNow = !(document.getElementById('invertColors')?.checked);
+    const colData = new Uint8ClampedArray(bins * 4);
+
+    function drawLiveColumn(){
+      liveAnalyser.getFloatFrequencyData(dataArray);
+
+      for(let i = 0; i < bins; i++){
+        // AnalyserNode returns dB values (typically -100 to 0)
+        const db = dataArray[i];
+        const norm = Math.max(0, Math.min(1, (db + dynRange) / dynRange));
+        const gray = Math.round(norm * 255);
+        const v = invertNow ? (255 - gray) : gray;
+        const lutIdx = v * 4;
+        // Flip vertically: low freq at bottom
+        const row = (bins - 1 - i);
+        colData[row * 4]     = LUT[lutIdx];
+        colData[row * 4 + 1] = LUT[lutIdx + 1];
+        colData[row * 4 + 2] = LUT[lutIdx + 2];
+        colData[row * 4 + 3] = 255;
+      }
+
+      const ctx = els.cSpec.getContext('2d', {willReadFrequently: true});
+      const colImage = new ImageData(colData, 1, bins);
+
+      if(liveColumn < canvasW){
+        ctx.putImageData(colImage, liveColumn, 0);
+        liveColumn++;
+      } else {
+        // Scroll left: shift canvas content 1px left, draw new column at right edge
+        ctx.drawImage(els.cSpec, -1, 0);
+        ctx.putImageData(colImage, canvasW - 1, 0);
+      }
+
+      liveAnimFrame = requestAnimationFrame(drawLiveColumn);
+    }
+
+    liveAnimFrame = requestAnimationFrame(drawLiveColumn);
+  }
+
+  function stopLiveSpectrogram(){
+    if(liveAnimFrame){
+      cancelAnimationFrame(liveAnimFrame);
+      liveAnimFrame = null;
+    }
+    if(liveAudioCtx){
+      liveAudioCtx.close().catch(()=>{});
+      liveAudioCtx = null;
+    }
+    liveAnalyser = null;
+    liveColumn = 0;
+  }
+
+  /* ============================================
+     MICROPHONE RECORDING
+     ============================================ */
+  if(els.btnRecord){
+    // Disable record button if microphone API unavailable (requires HTTPS or localhost)
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      els.btnRecord.disabled = true;
+      els.btnRecord.title = 'Recording requires HTTPS or localhost';
+    }
+
+    els.btnRecord.addEventListener('click', async ()=>{
+      // If currently recording, stop
+      if(mediaRecorder && mediaRecorder.state === 'recording'){
+        mediaRecorder.stop();
+        return;
+      }
+
+      // Start recording
+      try{
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        recordedChunks = [];
+
+        mediaRecorder = new MediaRecorder(stream);
+
+        mediaRecorder.addEventListener('dataavailable', (e)=>{
+          if(e.data.size > 0) recordedChunks.push(e.data);
+        });
+
+        mediaRecorder.addEventListener('stop', async ()=>{
+          // Stop live visualization
+          stopLiveSpectrogram();
+
+          // Stop mic access
+          stream.getTracks().forEach(t => t.stop());
+
+          // Reset UI
+          els.btnRecord.textContent = '⏺ Record';
+          els.btnRecord.classList.remove('recording');
+          els.recTimer.style.display = 'none';
+          clearInterval(recTimerInterval);
+
+          if(recordedChunks.length === 0) return;
+
+          try{
+            els.status.textContent = 'Processing recording...';
+            const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType });
+            const ab = await blob.arrayBuffer();
+            const actx = new (window.AudioContext || window.webkitAudioContext)();
+            audioBuffer = await actx.decodeAudioData(ab);
+
+            meta = {
+              sampleRate: audioBuffer.sampleRate,
+              duration: audioBuffer.duration,
+              channels: audioBuffer.numberOfChannels
+            };
+            wasOptimized = false;
+
+            els.status.textContent = `Recorded: ${meta.duration.toFixed(2)}s, ${meta.sampleRate}Hz, ${meta.channels}ch`;
+
+            if(Number(els.maxHz.value) === 0){
+              els.maxHz.value = String(Math.floor(meta.sampleRate / 2));
+            }
+
+            scheduleRender();
+          }catch(err){
+            els.status.textContent = 'Error processing recording: ' + err.message;
+            console.error(err);
+          }
+        });
+
+        mediaRecorder.start();
+        startLiveSpectrogram(stream);
+
+        // Update UI
+        els.btnRecord.textContent = '⏹ Stop';
+        els.btnRecord.classList.add('recording');
+        const startTime = Date.now();
+        els.recTimer.style.display = '';
+        els.recTimer.textContent = '0:00';
+        recTimerInterval = setInterval(()=>{
+          const s = Math.floor((Date.now() - startTime) / 1000);
+          const m = Math.floor(s / 60);
+          els.recTimer.textContent = m + ':' + String(s % 60).padStart(2, '0');
+        }, 250);
+
+        els.status.textContent = 'Recording...';
+      }catch(err){
+        els.status.textContent = 'Microphone access denied or unavailable.';
+        console.error(err);
+      }
+    });
+  }
+
   /* ============================================
      RENDER SCHEDULING
      ============================================ */
