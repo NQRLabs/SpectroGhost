@@ -648,13 +648,19 @@
     <div class="control-section">
       <h3>⚙️ Basic Settings</h3>
       <div class="row">
+        <label>Duration
+          <input type="text" id="diagDuration" value="—" readonly style="width: 90px; opacity: 0.7; cursor: default;">
+        </label>
+        <label>Sample Rate
+          <input type="text" id="diagSampleRate" value="—" readonly style="width: 90px; opacity: 0.7; cursor: default;">
+        </label>
         <label>FFT Size
           <select id="fftSize">
             <option>256</option>
             <option>512</option>
             <option>1024</option>
-            <option>2048</option>
-            <option selected>4096</option>
+            <option selected>2048</option>
+            <option>4096</option>
             <option>8192</option>
             <option>16384</option>
           </select>
@@ -786,6 +792,10 @@
             <input type="checkbox" id="invertColors">
             Invert Colors
           </label>
+          <label class="clickable inline">
+            <input type="checkbox" id="srgbGamma">
+            sRGB Gamma Encoding
+          </label>
         </div>
         
         <!-- Hidden select for compatibility -->
@@ -809,12 +819,13 @@
       <div class="row" style="gap: 12px;">
         <button id="btnRenderNow" style="display:none;">Render Now</button>
         <button id="btnDownload" disabled>Export PNG</button>
+        <button id="btnCopyClipboard" disabled>📋 Copy to Clipboard</button>
       </div>
       <div id="heavyNote" style="display:none; margin-top: 12px;">
         <small style="color: #f89540;">⚠️ Auto-render disabled for large job. Use "Render Now" or lower resolution.</small>
       </div>
       <div class="help-text">
-        💡 <strong>Tip:</strong> Ctrl + Mouse wheel = zoom • Drag to pan • Double-click to reset
+        💡 <strong>Tip:</strong> Ctrl + Mouse wheel = zoom • Drag to pan • Double-click to reset • Ctrl+Shift+C = copy to clipboard
       </div>
     </div>
   </div>
@@ -1211,6 +1222,7 @@ SOFTWARE.</pre>
     btnMakeInvertible: document.getElementById('btnMakeInvertible'),
     btnRenderNow: document.getElementById('btnRenderNow'),
     btnDownload: document.getElementById('btnDownload'),
+    btnCopyClipboard: document.getElementById('btnCopyClipboard'),
     heavyNote: document.getElementById('heavyNote'),
     status: document.getElementById('status'),
     cursor: document.getElementById('cursor'),
@@ -1220,7 +1232,9 @@ SOFTWARE.</pre>
     pxPerSecLabel: document.getElementById('pxPerSecLabel'),
     btnRecord: document.getElementById('btnRecord'),
     recTimer: document.getElementById('recTimer'),
-    btnSaveRecording: document.getElementById('btnSaveRecording')
+    btnSaveRecording: document.getElementById('btnSaveRecording'),
+    diagDuration: document.getElementById('diagDuration'),
+    diagSampleRate: document.getElementById('diagSampleRate')
   };
   
   /* ============================================
@@ -1412,6 +1426,13 @@ SOFTWARE.</pre>
       }
     });
   }
+
+  const srgbGammaChk = document.getElementById('srgbGamma');
+  if(srgbGammaChk){
+    srgbGammaChk.addEventListener('change', ()=>{
+      if(audioBuffer) scheduleRender();
+    });
+  }
   
   /* ============================================
      FILE INPUT HANDLER
@@ -1435,9 +1456,11 @@ SOFTWARE.</pre>
           channels: audioBuffer.numberOfChannels
         };
         wasOptimized = false;
-        
+
+        if(els.diagDuration) els.diagDuration.value = meta.duration.toFixed(3) + ' s';
+        if(els.diagSampleRate) els.diagSampleRate.value = meta.sampleRate + ' Hz';
         els.status.textContent = `Loaded: ${meta.duration.toFixed(2)}s, ${meta.sampleRate}Hz, ${meta.channels}ch`;
-        
+
         // Auto-set maxHz if 0
         if(Number(els.maxHz.value)===0){
           els.maxHz.value = String(Math.floor(meta.sampleRate/2));
@@ -1587,6 +1610,8 @@ SOFTWARE.</pre>
             };
             wasOptimized = false;
 
+            if(els.diagDuration) els.diagDuration.value = meta.duration.toFixed(3) + ' s';
+            if(els.diagSampleRate) els.diagSampleRate.value = meta.sampleRate + ' Hz';
             els.status.textContent = `Recorded: ${meta.duration.toFixed(2)}s, ${meta.sampleRate}Hz, ${meta.channels}ch`;
 
             if(Number(els.maxHz.value) === 0){
@@ -1689,6 +1714,13 @@ SOFTWARE.</pre>
   });
   
   /* ============================================
+     sRGB GAMMA TRANSFER FUNCTION
+     ============================================ */
+  function linearToSRGB(x){
+    return x <= 0.0031308 ? 12.92 * x : 1.055 * Math.pow(x, 1.0 / 2.4) - 0.055;
+  }
+
+  /* ============================================
      SPECTROGRAM RENDERING
      ============================================ */
   function renderSpectrogram(){
@@ -1696,12 +1728,14 @@ SOFTWARE.</pre>
     
     els.status.textContent = 'Rendering...';
     els.btnDownload.disabled = true;
+    if(els.btnCopyClipboard) els.btnCopyClipboard.disabled = true;
     
     // Get parameters
     const fftSize = Number(els.fftSize.value);
     const overlapPct = Number(els.overlapPercent?.value) || 75;
     const hop = Math.max(1, Math.round(fftSize * (1 - overlapPct / 100)));
     const dynRange = Number(els.dynRange.value);
+
     const scaleType = els.scale.value;
     const nyquist = meta.sampleRate/2;
     const isLog = (scaleType === 'log');
@@ -1716,7 +1750,7 @@ SOFTWARE.</pre>
     
     
     // Mix to mono
-    const mono = new Float32Array(audioBuffer.length);
+    let mono = new Float32Array(audioBuffer.length);
     for(let ch=0; ch<audioBuffer.numberOfChannels; ch++){
       const chData = audioBuffer.getChannelData(ch);
       for(let i=0; i<mono.length; i++){
@@ -1740,8 +1774,17 @@ SOFTWARE.</pre>
       window = hann(fftSize);
     }
 
+    // Zero-pad mono so (length - fftSize) is exactly divisible by hop
+    const remainder = (mono.length - fftSize) % hop;
+    if(remainder > 0){
+      const padAmount = hop - remainder;
+      const padded = new Float32Array(mono.length + padAmount);
+      padded.set(mono);
+      mono = padded;
+    }
+
     // Compute STFT
-    const frames = Math.floor((mono.length - fftSize)/hop)+1;
+    const frames = (mono.length - fftSize)/hop + 1;
     const bins = fftSize/2+1;
     
     const mag = new Float32Array(frames*bins);
@@ -1844,7 +1887,6 @@ SOFTWARE.</pre>
           db = db1 + frac * (db2 - db1);
         }
         const norm = Math.max(0, Math.min(1, (db+dynRange)/dynRange));
-        
         gray8[y*w+x] = Math.round(norm*255);
       }
     }
@@ -1860,8 +1902,9 @@ SOFTWARE.</pre>
     // Render to canvas
     renderOffscreenToCanvas();
 
-    // Enable download
+    // Enable download/copy
     els.btnDownload.disabled = false;
+    if(els.btnCopyClipboard) els.btnCopyClipboard.disabled = false;
     els.status.textContent = `Rendered: ${w}x${h} px (${actualPxPerSec.toFixed(1)} px/sec)`;
   }
   
@@ -1874,17 +1917,24 @@ SOFTWARE.</pre>
     const w = offscreen.w;
     const h = offscreen.h;
     
-    // Apply colormap
+    // Apply colormap + optional sRGB gamma encoding
     const rgba = new Uint8ClampedArray(w*h*4);
     const invertNow = !(invertChk && invertChk.checked);
-    
+    const applySRGB = !!(document.getElementById('srgbGamma')?.checked);
+
     for(let i=0; i<w*h; i++){
       const val = offscreen.gray8[i];
       const v = invertNow ? (255-val) : val;
       const lutIdx = v*4;
-      rgba[i*4] = LUT[lutIdx];
-      rgba[i*4+1] = LUT[lutIdx+1];
-      rgba[i*4+2] = LUT[lutIdx+2];
+      let r = LUT[lutIdx], g = LUT[lutIdx+1], b = LUT[lutIdx+2];
+      if(applySRGB){
+        r = Math.round(linearToSRGB(r/255)*255);
+        g = Math.round(linearToSRGB(g/255)*255);
+        b = Math.round(linearToSRGB(b/255)*255);
+      }
+      rgba[i*4] = r;
+      rgba[i*4+1] = g;
+      rgba[i*4+2] = b;
       rgba[i*4+3] = 255;
     }
     
@@ -2195,13 +2245,20 @@ SOFTWARE.</pre>
       const invNow = !(document.getElementById('invertColors')?.checked);
       
       // Build RGBA pixel buffer using the colormap LUT (matches preview)
+      const applySRGBExp = !!(document.getElementById('srgbGamma')?.checked);
       const rgba = new Uint8ClampedArray(offscreen.gray8.length * 4);
       for (let i = 0; i < offscreen.gray8.length; i++) {
         const v = offscreen.gray8[i];
         const lutIdx = (invNow ? (255 - v) : v) * 4;
-        rgba[i*4+0] = LUT[lutIdx+0];
-        rgba[i*4+1] = LUT[lutIdx+1];
-        rgba[i*4+2] = LUT[lutIdx+2];
+        let r = LUT[lutIdx+0], g = LUT[lutIdx+1], b = LUT[lutIdx+2];
+        if(applySRGBExp){
+          r = Math.round(linearToSRGB(r/255)*255);
+          g = Math.round(linearToSRGB(g/255)*255);
+          b = Math.round(linearToSRGB(b/255)*255);
+        }
+        rgba[i*4+0] = r;
+        rgba[i*4+1] = g;
+        rgba[i*4+2] = b;
         rgba[i*4+3] = 255;
       }
       
@@ -2225,11 +2282,12 @@ SOFTWARE.</pre>
         maxHz: String(Number(els.maxHz.value)||0),
         pxPerSec: String(Number(els.pxPerSec.value)||0),
         optimized: String(wasOptimized),
+        srgbGamma: String(!!(document.getElementById('srgbGamma')?.checked)),
         duration_sec: String(meta?.duration?.toFixed(6)||'0'),
         __height: String(h),
         __width: String(w)
       };
-      
+
       const png = encodeRGBA8(w, h, rgba, metaOut);
       const blob = new Blob([png], {type:'image/png'});
       const url = URL.createObjectURL(blob);
@@ -2243,6 +2301,83 @@ SOFTWARE.</pre>
     });
   }
   
+  /* ============================================
+     COPY TO CLIPBOARD
+     ============================================ */
+  function copySpectrogramToClipboard(){
+    if(!offscreen || !offscreen.gray8) return;
+    const w = offscreen.w, h = offscreen.h;
+    if(!(w > 0 && h > 0)) return;
+
+    const invNow = !(document.getElementById('invertColors')?.checked);
+
+    // Build RGBA pixel buffer using the colormap LUT (same as export)
+    const applySRGBClip = !!(document.getElementById('srgbGamma')?.checked);
+    const rgba = new Uint8ClampedArray(offscreen.gray8.length * 4);
+    for(let i = 0; i < offscreen.gray8.length; i++){
+      const v = offscreen.gray8[i];
+      const lutIdx = (invNow ? (255 - v) : v) * 4;
+      let r = LUT[lutIdx], g = LUT[lutIdx+1], b = LUT[lutIdx+2];
+      if(applySRGBClip){
+        r = Math.round(linearToSRGB(r/255)*255);
+        g = Math.round(linearToSRGB(g/255)*255);
+        b = Math.round(linearToSRGB(b/255)*255);
+      }
+      rgba[i*4]   = r;
+      rgba[i*4+1] = g;
+      rgba[i*4+2] = b;
+      rgba[i*4+3] = 255;
+    }
+
+    // Build metadata (same as export)
+    const fftSizeVal = Number(els.fftSize.value) || 2048;
+    const overlapPctVal = Number(els.overlapPercent?.value) || 75;
+    const hopVal = Math.max(1, Math.round(fftSizeVal * (1 - overlapPctVal / 100)));
+    const metaOut = {
+      colormap: String(els.colormap?.value || 'grayscale'),
+      invertColors: String(!invNow),
+      fftSize: String(fftSizeVal),
+      hop: String(hopVal),
+      overlapPercent: String(overlapPctVal),
+      windowType: String(els.windowFunction?.value || 'hann'),
+      sampleRate: String(meta?.sampleRate || 48000),
+      dynRange: String(Number(els.dynRange.value)||0),
+      scale: String(els.scale?.value || 'linear'),
+      melType: 'htk',
+      minHz: String(Number(els.minHz.value)||0),
+      maxHz: String(Number(els.maxHz.value)||0),
+      pxPerSec: String(Number(els.pxPerSec.value)||0),
+      optimized: String(wasOptimized),
+      srgbGamma: String(!!(document.getElementById('srgbGamma')?.checked)),
+      duration_sec: String(meta?.duration?.toFixed(6)||'0'),
+      __height: String(h),
+      __width: String(w)
+    };
+
+    const png = encodeRGBA8(w, h, rgba, metaOut);
+    const blob = new Blob([png], {type: 'image/png'});
+    navigator.clipboard.write([
+      new ClipboardItem({ 'image/png': blob })
+    ]).then(()=>{
+      els.status.textContent = 'Copied spectrogram to clipboard (with metadata).';
+    }).catch((err)=>{
+      els.status.textContent = 'Copy failed: ' + err.message;
+    });
+  }
+
+  if(els.btnCopyClipboard){
+    els.btnCopyClipboard.addEventListener('click', copySpectrogramToClipboard);
+  }
+
+  document.addEventListener('keydown', (e)=>{
+    if((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'c'){
+      if(offscreen){
+        e.preventDefault();
+        copySpectrogramToClipboard();
+      }
+    }
+  });
+
   /* ============================================
      INITIALIZATION
      ============================================ */
