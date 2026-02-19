@@ -814,6 +814,20 @@
       </div>
     </div>
 
+    <!-- Export Options -->
+    <div class="control-section">
+      <div class="row" style="gap: 16px;">
+        <label class="clickable inline">
+          <input type="checkbox" id="printBorder" checked>
+          Border
+        </label>
+        <label class="clickable inline">
+          <input type="checkbox" id="printInfo" checked>
+          Info Margin
+        </label>
+      </div>
+    </div>
+
     <!-- Action Buttons -->
     <div class="control-section">
       <div class="row" style="gap: 12px;">
@@ -1433,7 +1447,15 @@ SOFTWARE.</pre>
       if(audioBuffer) scheduleRender();
     });
   }
-  
+
+  // Border and Info Margin checkboxes re-render preview (no STFT recompute needed)
+  ['printBorder','printInfo'].forEach(id=>{
+    const chk = document.getElementById(id);
+    if(chk) chk.addEventListener('change', ()=>{
+      if(offscreen && offscreen.gray8) renderOffscreenToCanvas();
+    });
+  });
+
   /* ============================================
      FILE INPUT HANDLER
      ============================================ */
@@ -1938,19 +1960,30 @@ SOFTWARE.</pre>
       rgba[i*4+3] = 255;
     }
     
+    // Apply print layout (border + info margin) if enabled
+    const previewMeta = {
+      sampleRate: String(meta?.sampleRate || 48000),
+      fftSize: String(Number(els.fftSize.value) || 2048),
+      minHz: String(Number(els.minHz.value) || 0),
+      maxHz: String(Number(els.maxHz.value) || 0),
+      duration_sec: String(meta?.duration?.toFixed(6) || '0'),
+      colormap: String(els.colormap?.value || 'grayscale')
+    };
+    const layout = applyPrintLayout(rgba, w, h, previewMeta);
+
     // Update canvas
-    els.cSpec.width = w;
-    els.cSpec.height = h;
+    els.cSpec.width = layout.width;
+    els.cSpec.height = layout.height;
     els.cSpec.style.position = 'absolute';
     els.cSpec.style.left = '0px';
     els.cSpec.style.top = '0px';
     els.cSpec.style.zIndex = '3';
-    
+
     const ctx = els.cSpec.getContext('2d', {willReadFrequently: true});
     ctx.imageSmoothingEnabled = false;
-    ctx.putImageData(new ImageData(rgba, w, h), 0, 0);
-    
-    offscreen.imageData = new ImageData(rgba, w, h);
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(layout.rgba), layout.width, layout.height), 0, 0);
+
+    offscreen.imageData = new ImageData(new Uint8ClampedArray(layout.rgba), layout.width, layout.height);
   }
   
   /* ============================================
@@ -2233,6 +2266,78 @@ SOFTWARE.</pre>
     return _concat(chunks);
   }
 
+  /* ============================================
+     PRINT LAYOUT: BORDER + INFO MARGIN
+     ============================================ */
+  const PRINT_BORDER_WIDTH = 2;
+  const PRINT_INFO_HEIGHT = 24;
+
+  // Wrap spectrogram RGBA with optional border and info text margin.
+  // Returns { rgba, width, height } for the final image.
+  function applyPrintLayout(specRGBA, specW, specH, metaObj){
+    const addBorder = !!(document.getElementById('printBorder')?.checked);
+    const addInfo   = !!(document.getElementById('printInfo')?.checked);
+
+    if(!addBorder && !addInfo) return { rgba: specRGBA, width: specW, height: specH };
+
+    const bw = addBorder ? PRINT_BORDER_WIDTH : 0;
+    const ih = addInfo ? PRINT_INFO_HEIGHT : 0;
+    const totalW = specW + bw * 2;
+    const totalH = specH + bw * 2 + ih;
+
+    // Use a temporary canvas to composite everything
+    const tc = document.createElement('canvas');
+    tc.width = totalW;
+    tc.height = totalH;
+    const tctx = tc.getContext('2d');
+
+    // Fill background white (visible in border and info areas)
+    tctx.fillStyle = '#ffffff';
+    tctx.fillRect(0, 0, totalW, totalH);
+
+    // Draw border (black)
+    if(addBorder){
+      tctx.fillStyle = '#000000';
+      // Top
+      tctx.fillRect(0, 0, totalW, bw);
+      // Bottom (below spectrogram, above info)
+      tctx.fillRect(0, bw + specH, totalW, bw);
+      // Left
+      tctx.fillRect(0, 0, bw, bw * 2 + specH);
+      // Right
+      tctx.fillRect(totalW - bw, 0, bw, bw * 2 + specH);
+    }
+
+    // Draw spectrogram pixels
+    const specImgData = new ImageData(new Uint8ClampedArray(specRGBA), specW, specH);
+    tctx.putImageData(specImgData, bw, bw);
+
+    // Draw info text in bottom margin
+    if(addInfo){
+      const infoY = bw * 2 + specH;
+      tctx.fillStyle = '#ffffff';
+      tctx.fillRect(0, infoY, totalW, ih);
+
+      const sr = metaObj.sampleRate || '48000';
+      const fft = metaObj.fftSize || '2048';
+      const minF = metaObj.minHz || '0';
+      const maxF = metaObj.maxHz || '?';
+      const dur = metaObj.duration_sec ? Number(metaObj.duration_sec).toFixed(1) : '?';
+      const cmap = metaObj.colormap || 'grayscale';
+      const infoText = `${sr}Hz  FFT ${fft}  ${minF}-${maxF}Hz  ${dur}s  ${cmap}`;
+
+      tctx.fillStyle = '#000000';
+      tctx.font = '11px monospace';
+      tctx.textBaseline = 'middle';
+      tctx.textAlign = 'center';
+      tctx.fillText(infoText, totalW / 2, infoY + ih / 2);
+    }
+
+    // Extract final RGBA
+    const finalData = tctx.getImageData(0, 0, totalW, totalH);
+    return { rgba: finalData.data, width: totalW, height: totalH };
+  }
+
   // Export button handler
   if(els.btnDownload){
     els.btnDownload.addEventListener('click', ()=>{
@@ -2267,9 +2372,12 @@ SOFTWARE.</pre>
       const overlapPctVal = Number(els.overlapPercent?.value) || 75;
       const hopVal = Math.max(1, Math.round(fftSizeVal * (1 - overlapPctVal / 100)));
 
+      const addBorder = !!(document.getElementById('printBorder')?.checked);
+      const addInfo = !!(document.getElementById('printInfo')?.checked);
+
       const metaOut = {
         colormap: String(els.colormap?.value || 'grayscale'),
-        invertColors: String(!invNow),             // matches UI label now
+        invertColors: String(!invNow),
         fftSize: String(fftSizeVal),
         hop: String(hopVal),
         overlapPercent: String(overlapPctVal),
@@ -2277,7 +2385,7 @@ SOFTWARE.</pre>
         sampleRate: String(meta?.sampleRate || 48000),
         dynRange: String(Number(els.dynRange.value)||0),
         scale: String(els.scale?.value || 'linear'),
-        melType: 'htk',  // SpectroGhost uses HTK Mel formula
+        melType: 'htk',
         minHz: String(Number(els.minHz.value)||0),
         maxHz: String(Number(els.maxHz.value)||0),
         pxPerSec: String(Number(els.pxPerSec.value)||0),
@@ -2285,10 +2393,15 @@ SOFTWARE.</pre>
         srgbGamma: String(!!(document.getElementById('srgbGamma')?.checked)),
         duration_sec: String(meta?.duration?.toFixed(6)||'0'),
         __height: String(h),
-        __width: String(w)
+        __width: String(w),
+        printBorder: String(addBorder),
+        printBorderWidth: String(addBorder ? PRINT_BORDER_WIDTH : 0),
+        printInfo: String(addInfo),
+        printInfoHeight: String(addInfo ? PRINT_INFO_HEIGHT : 0)
       };
 
-      const png = encodeRGBA8(w, h, rgba, metaOut);
+      const layout = applyPrintLayout(rgba, w, h, metaOut);
+      const png = encodeRGBA8(layout.width, layout.height, layout.rgba, metaOut);
       const blob = new Blob([png], {type:'image/png'});
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -2330,6 +2443,8 @@ SOFTWARE.</pre>
     }
 
     // Build metadata (same as export)
+    const addBorderClip = !!(document.getElementById('printBorder')?.checked);
+    const addInfoClip = !!(document.getElementById('printInfo')?.checked);
     const fftSizeVal = Number(els.fftSize.value) || 2048;
     const overlapPctVal = Number(els.overlapPercent?.value) || 75;
     const hopVal = Math.max(1, Math.round(fftSizeVal * (1 - overlapPctVal / 100)));
@@ -2351,10 +2466,15 @@ SOFTWARE.</pre>
       srgbGamma: String(!!(document.getElementById('srgbGamma')?.checked)),
       duration_sec: String(meta?.duration?.toFixed(6)||'0'),
       __height: String(h),
-      __width: String(w)
+      __width: String(w),
+      printBorder: String(addBorderClip),
+      printBorderWidth: String(addBorderClip ? PRINT_BORDER_WIDTH : 0),
+      printInfo: String(addInfoClip),
+      printInfoHeight: String(addInfoClip ? PRINT_INFO_HEIGHT : 0)
     };
 
-    const png = encodeRGBA8(w, h, rgba, metaOut);
+    const layout = applyPrintLayout(rgba, w, h, metaOut);
+    const png = encodeRGBA8(layout.width, layout.height, layout.rgba, metaOut);
     const blob = new Blob([png], {type: 'image/png'});
     navigator.clipboard.write([
       new ClipboardItem({ 'image/png': blob })
