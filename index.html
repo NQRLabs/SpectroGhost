@@ -1264,6 +1264,7 @@ SOFTWARE.</pre>
   let recTimerInterval = null;
   let lastRecordingBlob = null;
   let lastRecordingMime = null;
+  let lastRecordingOpusBlob = null;
   let liveAnalyser = null;
   let liveAudioCtx = null;
   let liveAnimFrame = null;
@@ -1468,6 +1469,7 @@ SOFTWARE.</pre>
         els.status.textContent = 'Loading audio...';
         if(els.btnSaveRecording) els.btnSaveRecording.style.display = 'none';
         lastRecordingBlob = null;
+        lastRecordingOpusBlob = null;
         const ab = await file.arrayBuffer();
         const actx = new (window.AudioContext || window.webkitAudioContext)();
         audioBuffer = await actx.decodeAudioData(ab);
@@ -1641,6 +1643,23 @@ SOFTWARE.</pre>
             }
 
             scheduleRender();
+
+            // Re-encode with WebCodecs Opus for smaller download (non-blocking)
+            lastRecordingOpusBlob = null;
+            try{
+              const nch = audioBuffer.numberOfChannels;
+              let signal = audioBuffer.getChannelData(0);
+              if(nch > 1){
+                signal = new Float32Array(audioBuffer.length);
+                for(let ch = 0; ch < nch; ch++){
+                  const d = audioBuffer.getChannelData(ch);
+                  for(let i = 0; i < signal.length; i++) signal[i] += d[i];
+                }
+                for(let i = 0; i < signal.length; i++) signal[i] /= nch;
+              }
+              const opus = await encodeToOpusWebM(signal, audioBuffer.sampleRate);
+              if(opus) lastRecordingOpusBlob = opus.blob;
+            }catch(e){ /* silently fall back to MediaRecorder blob */ }
           }catch(err){
             els.status.textContent = 'Error processing recording: ' + err.message;
             console.error(err);
@@ -1671,15 +1690,142 @@ SOFTWARE.</pre>
   }
 
   /* ============================================
+     OPUS ENCODER (WebCodecs + WebM muxer)
+     ============================================ */
+
+  async function encodeToOpusWebM(signal, sampleRate){
+    if(typeof AudioEncoder === 'undefined') return null;
+    const SR = 48000, FRAME = 960;
+    let check;
+    try{ check = await AudioEncoder.isConfigSupported({ codec:'opus', sampleRate:SR, numberOfChannels:1 }); }
+    catch(e){ return null; }
+    if(!check.supported) return null;
+
+    const pcm = (sampleRate === SR) ? signal : _resampleLinear(signal, sampleRate, SR);
+    const totalSamples = pcm.length;
+    const packets = [];
+    let firstMeta = null, encErr = null;
+
+    const enc = new AudioEncoder({
+      output(chunk, meta){
+        if(meta?.decoderConfig && !firstMeta) firstMeta = meta;
+        const buf = new Uint8Array(chunk.byteLength);
+        chunk.copyTo(buf);
+        packets.push(buf);
+      },
+      error(e){ encErr = e; }
+    });
+
+    enc.configure({ codec:'opus', sampleRate:SR, numberOfChannels:1, bitrate:64000 });
+    let ts = 0;
+    for(let off = 0; off < pcm.length; off += FRAME){
+      const slice = pcm.subarray(off, off + FRAME);
+      let frame = slice;
+      if(slice.length < FRAME){ frame = new Float32Array(FRAME); frame.set(slice); }
+      const ad = new AudioData({ format:'f32-planar', sampleRate:SR, numberOfFrames:FRAME, numberOfChannels:1, timestamp:ts, data:frame });
+      enc.encode(ad); ad.close();
+      ts += 20000;
+    }
+    await enc.flush(); enc.close();
+    if(encErr || packets.length === 0) return null;
+
+    let preSkip = 312;
+    if(firstMeta?.decoderConfig?.description){
+      const d = firstMeta.decoderConfig.description;
+      const dv = (d instanceof ArrayBuffer) ? new DataView(d) : new DataView(d.buffer, d.byteOffset, d.byteLength);
+      preSkip = dv.getUint16(10, true);
+    }
+
+    const webm = _muxWebM(packets, preSkip, totalSamples, sampleRate, 'SpectroGhost');
+    return { blob: new Blob([webm], { type:'audio/webm; codecs=opus' }), ext:'webm' };
+  }
+
+  function _resampleLinear(input, fromRate, toRate){
+    const ratio = fromRate / toRate;
+    const out = new Float32Array(Math.round(input.length / ratio));
+    for(let i = 0; i < out.length; i++){
+      const p = i * ratio, lo = Math.floor(p), hi = Math.min(lo + 1, input.length - 1);
+      out[i] = input[lo] + (p - lo) * (input[hi] - input[lo]);
+    }
+    return out;
+  }
+
+  function _muxWebM(packets, preSkip, totalSamples, inputSampleRate, appName){
+    const SR = 48000, FRAME = 960;
+    const durationMs = totalSamples / SR * 1000;
+    const cp = new Uint8Array(19);
+    cp.set(new TextEncoder().encode('OpusHead'));
+    cp[8]=1; cp[9]=1;
+    new DataView(cp.buffer).setUint16(10, preSkip, true);
+    new DataView(cp.buffer).setUint32(12, inputSampleRate, true);
+    cp[18]=0;
+    const codecDelayNs = Math.round(preSkip / SR * 1e9);
+    const uid = new Uint8Array(8); crypto.getRandomValues(uid);
+
+    const info = _we(0x1549A966, _wc(
+      _we(0x2AD7B1, _wu(1000000, 4)),
+      _we(0x4489,   _wf(durationMs)),
+      _we(0x4D80,   _ws(appName)),
+      _we(0x5741,   _ws(appName))
+    ));
+    const tracks = _we(0x1654AE6B, _we(0xAE, _wc(
+      _we(0xD7,   _wu(1, 1)),
+      _we(0x73C5, uid),
+      _we(0x83,   _wu(2, 1)),
+      _we(0x86,   _ws('A_OPUS')),
+      _we(0x63A2, cp),
+      _we(0x56AA, _wu(codecDelayNs, 8)),
+      _we(0x56BB, _wu(80000000, 8)),
+      _we(0xE1, _wc(_we(0xB5, _wf(SR)), _we(0x9F, _wu(1, 1))))
+    )));
+
+    const CLUSTER_MS = 8000;
+    const clusterElems = [];
+    let i = 0;
+    while(i < packets.length){
+      const clusterTimeMs = i * 20;
+      const parts = [_we(0xE7, _wu(clusterTimeMs, 4))];
+      while(i < packets.length && (i * 20 - clusterTimeMs) < CLUSTER_MS){
+        const rel = i * 20 - clusterTimeMs;
+        const sb = new Uint8Array(4 + packets[i].length);
+        sb[0]=0x81; sb[1]=(rel>>8)&0xFF; sb[2]=rel&0xFF; sb[3]=0x80;
+        sb.set(packets[i], 4);
+        parts.push(_we(0xA3, sb));
+        i++;
+      }
+      clusterElems.push(_we(0x1F43B675, _wc(...parts)));
+    }
+
+    const segment = _we(0x18538067, _wc(info, tracks, ...clusterElems));
+    const header  = _we(0x1A45DFA3, _wc(
+      _we(0x4286, _wu(1, 1)),  _we(0x42F7, _wu(1, 1)),
+      _we(0x42F2, _wu(4, 1)),  _we(0x42F3, _wu(8, 1)),
+      _we(0x4282, _ws('webm')),
+      _we(0x4287, _wu(4, 1)),  _we(0x4285, _wu(2, 1))
+    ));
+    return _wc(header, segment);
+  }
+
+  function _wc(...a){ let n=0; for(const x of a) n+=x.length; const o=new Uint8Array(n); let p=0; for(const x of a){ o.set(x,p); p+=x.length; } return o; }
+  function _wv(v){ if(v<0x7F) return new Uint8Array([v|0x80]); if(v<0x3FFF) return new Uint8Array([(v>>8)|0x40,v&0xFF]); if(v<0x1FFFFF) return new Uint8Array([(v>>16)|0x20,(v>>8)&0xFF,v&0xFF]); return new Uint8Array([(v>>>24)|0x10,(v>>16)&0xFF,(v>>8)&0xFF,v&0xFF]); }
+  function _wi(id){ if(id<=0xFF) return new Uint8Array([id]); if(id<=0xFFFF) return new Uint8Array([id>>8,id&0xFF]); if(id<=0xFFFFFF) return new Uint8Array([id>>16,(id>>8)&0xFF,id&0xFF]); return new Uint8Array([id>>>24,(id>>16)&0xFF,(id>>8)&0xFF,id&0xFF]); }
+  function _we(id, data){ return _wc(_wi(id), _wv(data.length), data); }
+  function _wu(v, bytes){ const a=new Uint8Array(bytes); for(let i=bytes-1;i>=0;i--){ a[i]=v&0xFF; v=Math.floor(v/256); } return a; }
+  function _wf(v){ const b=new ArrayBuffer(8); new DataView(b).setFloat64(0,v); return new Uint8Array(b); }
+  function _ws(s){ return new TextEncoder().encode(s); }
+
+  /* ============================================
      SAVE RECORDING
      ============================================ */
   if(els.btnSaveRecording){
     els.btnSaveRecording.addEventListener('click', ()=>{
-      if(!lastRecordingBlob) return;
-      const ext = (lastRecordingMime || '').includes('webm') ? 'webm'
+      const blob = lastRecordingOpusBlob || lastRecordingBlob;
+      if(!blob) return;
+      const ext = lastRecordingOpusBlob ? 'webm'
+                : (lastRecordingMime || '').includes('webm') ? 'webm'
                 : (lastRecordingMime || '').includes('ogg') ? 'ogg'
                 : (lastRecordingMime || '').includes('mp4') ? 'mp4' : 'wav';
-      const url = URL.createObjectURL(lastRecordingBlob);
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = 'recording.' + ext;
@@ -2254,6 +2400,51 @@ SOFTWARE.</pre>
     return _concat(chunks);
   }
 
+  // PNG color type 0 (grayscale): 1 byte per pixel, no PLTE chunk needed.
+  // gray: Uint8Array of w*h gray values (0=black, 255=white).
+  async function encodeGray8(w, h, gray, meta){
+    const sig = new Uint8Array([137,80,78,71,13,10,26,10]);
+
+    const ihdr = new Uint8Array(13);
+    const dv = new DataView(ihdr.buffer);
+    dv.setUint32(0, w);
+    dv.setUint32(4, h);
+    ihdr[8] = 8;  // 8-bit depth
+    ihdr[9] = 0;  // color type 0 = grayscale
+    ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+
+    const chunks = [
+      sig,
+      _chunk(new Uint8Array([73,72,68,82]), ihdr)  // IHDR
+    ];
+
+    if(meta){
+      for(const k in meta){
+        const text = new TextEncoder().encode(k + "\x00" + meta[k]);
+        chunks.push(_chunk(new Uint8Array([116,69,88,116]), text)); // tEXt
+      }
+    }
+
+    // Each row: Sub filter (type 1) + 1 byte per pixel
+    const scan = new Uint8Array(h * (1 + w));
+    let di = 0;
+    for(let y = 0; y < h; y++){
+      scan[di++] = 1; // Sub filter
+      const rowOff = y * w;
+      for(let x = 0; x < w; x++){
+        const raw = gray[rowOff + x];
+        const left = x > 0 ? gray[rowOff + x - 1] : 0;
+        scan[di++] = (raw - left) & 0xff;
+      }
+    }
+
+    const z = await _zlibDeflate(scan);
+    chunks.push(_chunk(new Uint8Array([73,68,65,84]), z)); // IDAT
+    chunks.push(_chunk(new Uint8Array([73,69,78,68]), null)); // IEND
+
+    return _concat(chunks);
+  }
+
   // PNG color type 3 (indexed/palette): 1 byte per pixel.
   // palette: Uint8Array of 256*3 RGB bytes (no alpha).
   // pixels:  Uint8Array of w*h palette indices.
@@ -2419,8 +2610,31 @@ SOFTWARE.</pre>
       };
 
       let png;
-      if(!addBorder && !addInfo){
-        // PNG8 (indexed): 1 byte/pixel — ~4x smaller than RGBA
+      const isGrayscale = (els.colormap?.value || 'grayscale') === 'grayscale';
+      if(isGrayscale){
+        // Grayscale: color type 0 — 1 byte/pixel, no PLTE chunk
+        const gray8 = offscreen.gray8;
+        const gray = new Uint8Array(w * h);
+        for(let i = 0; i < gray8.length; i++){
+          const v = invNow ? (255 - gray8[i]) : gray8[i];
+          gray[i] = applySRGBExp ? Math.round(linearToSRGB(v/255)*255) : v;
+        }
+        if(addBorder || addInfo){
+          // Composite border/info via canvas (needs RGBA), then strip back to R channel
+          const rgba = new Uint8ClampedArray(w * h * 4);
+          for(let i = 0; i < w * h; i++){
+            rgba[i*4] = rgba[i*4+1] = rgba[i*4+2] = gray[i]; rgba[i*4+3] = 255;
+          }
+          const layout = applyPrintLayout(rgba, w, h, metaOut);
+          const finalW = layout.width, finalH = layout.height;
+          const finalGray = new Uint8Array(finalW * finalH);
+          for(let j = 0; j < finalW * finalH; j++) finalGray[j] = layout.rgba[j*4];
+          png = await encodeGray8(finalW, finalH, finalGray, metaOut);
+        } else {
+          png = await encodeGray8(w, h, gray, metaOut);
+        }
+      } else {
+        // Non-grayscale colormap: indexed PNG8 (1 byte/pixel with PLTE)
         const palette = new Uint8Array(256 * 3);
         for(let i = 0; i < 256; i++){
           let r = LUT[i*4], g = LUT[i*4+1], b = LUT[i*4+2];
@@ -2433,26 +2647,25 @@ SOFTWARE.</pre>
         }
         const gray8 = offscreen.gray8;
         const pixels = new Uint8Array(w * h);
-        for(let i = 0; i < gray8.length; i++){
-          pixels[i] = invNow ? (255 - gray8[i]) : gray8[i];
-        }
-        png = await encodeIndexed8(w, h, pixels, palette, metaOut);
-      } else {
-        // Print layout needs RGBA for canvas-based text rendering
-        const rgba = new Uint8ClampedArray(offscreen.gray8.length * 4);
-        for(let i = 0; i < offscreen.gray8.length; i++){
-          const v = offscreen.gray8[i];
-          const lutIdx = (invNow ? (255 - v) : v) * 4;
-          let r = LUT[lutIdx+0], g = LUT[lutIdx+1], b = LUT[lutIdx+2];
-          if(applySRGBExp){
-            r = Math.round(linearToSRGB(r/255)*255);
-            g = Math.round(linearToSRGB(g/255)*255);
-            b = Math.round(linearToSRGB(b/255)*255);
+        for(let i = 0; i < gray8.length; i++) pixels[i] = invNow ? (255 - gray8[i]) : gray8[i];
+        if(addBorder || addInfo){
+          // Border/info with colormap: must stay RGBA (palette can't represent border grays)
+          const rgba = new Uint8ClampedArray(gray8.length * 4);
+          for(let i = 0; i < gray8.length; i++){
+            const lutIdx = pixels[i] * 4;
+            let r = LUT[lutIdx], g = LUT[lutIdx+1], b = LUT[lutIdx+2];
+            if(applySRGBExp){
+              r = Math.round(linearToSRGB(r/255)*255);
+              g = Math.round(linearToSRGB(g/255)*255);
+              b = Math.round(linearToSRGB(b/255)*255);
+            }
+            rgba[i*4] = r; rgba[i*4+1] = g; rgba[i*4+2] = b; rgba[i*4+3] = 255;
           }
-          rgba[i*4+0] = r; rgba[i*4+1] = g; rgba[i*4+2] = b; rgba[i*4+3] = 255;
+          const layout = applyPrintLayout(rgba, w, h, metaOut);
+          png = await encodeRGBA8(layout.width, layout.height, layout.rgba, metaOut);
+        } else {
+          png = await encodeIndexed8(w, h, pixels, palette, metaOut);
         }
-        const layout = applyPrintLayout(rgba, w, h, metaOut);
-        png = await encodeRGBA8(layout.width, layout.height, layout.rgba, metaOut);
       }
 
       const blob = new Blob([png], {type:'image/png'});
@@ -2509,8 +2722,30 @@ SOFTWARE.</pre>
     };
 
     let png;
-    if(!addBorderClip && !addInfoClip){
-      // PNG8 (indexed): 1 byte/pixel — ~4x smaller than RGBA
+    const isGrayscaleClip = (els.colormap?.value || 'grayscale') === 'grayscale';
+    if(isGrayscaleClip){
+      // Grayscale: color type 0 — 1 byte/pixel, no PLTE chunk
+      const gray8 = offscreen.gray8;
+      const gray = new Uint8Array(w * h);
+      for(let i = 0; i < gray8.length; i++){
+        const v = invNow ? (255 - gray8[i]) : gray8[i];
+        gray[i] = applySRGBClip ? Math.round(linearToSRGB(v/255)*255) : v;
+      }
+      if(addBorderClip || addInfoClip){
+        const rgba = new Uint8ClampedArray(w * h * 4);
+        for(let i = 0; i < w * h; i++){
+          rgba[i*4] = rgba[i*4+1] = rgba[i*4+2] = gray[i]; rgba[i*4+3] = 255;
+        }
+        const layout = applyPrintLayout(rgba, w, h, metaOut);
+        const finalW = layout.width, finalH = layout.height;
+        const finalGray = new Uint8Array(finalW * finalH);
+        for(let j = 0; j < finalW * finalH; j++) finalGray[j] = layout.rgba[j*4];
+        png = await encodeGray8(finalW, finalH, finalGray, metaOut);
+      } else {
+        png = await encodeGray8(w, h, gray, metaOut);
+      }
+    } else {
+      // Non-grayscale colormap: indexed PNG8 (1 byte/pixel with PLTE)
       const palette = new Uint8Array(256 * 3);
       for(let i = 0; i < 256; i++){
         let r = LUT[i*4], g = LUT[i*4+1], b = LUT[i*4+2];
@@ -2523,26 +2758,24 @@ SOFTWARE.</pre>
       }
       const gray8 = offscreen.gray8;
       const pixels = new Uint8Array(w * h);
-      for(let i = 0; i < gray8.length; i++){
-        pixels[i] = invNow ? (255 - gray8[i]) : gray8[i];
-      }
-      png = await encodeIndexed8(w, h, pixels, palette, metaOut);
-    } else {
-      // Print layout needs RGBA for canvas-based text rendering
-      const rgba = new Uint8ClampedArray(offscreen.gray8.length * 4);
-      for(let i = 0; i < offscreen.gray8.length; i++){
-        const v = offscreen.gray8[i];
-        const lutIdx = (invNow ? (255 - v) : v) * 4;
-        let r = LUT[lutIdx], g = LUT[lutIdx+1], b = LUT[lutIdx+2];
-        if(applySRGBClip){
-          r = Math.round(linearToSRGB(r/255)*255);
-          g = Math.round(linearToSRGB(g/255)*255);
-          b = Math.round(linearToSRGB(b/255)*255);
+      for(let i = 0; i < gray8.length; i++) pixels[i] = invNow ? (255 - gray8[i]) : gray8[i];
+      if(addBorderClip || addInfoClip){
+        const rgba = new Uint8ClampedArray(gray8.length * 4);
+        for(let i = 0; i < gray8.length; i++){
+          const lutIdx = pixels[i] * 4;
+          let r = LUT[lutIdx], g = LUT[lutIdx+1], b = LUT[lutIdx+2];
+          if(applySRGBClip){
+            r = Math.round(linearToSRGB(r/255)*255);
+            g = Math.round(linearToSRGB(g/255)*255);
+            b = Math.round(linearToSRGB(b/255)*255);
+          }
+          rgba[i*4] = r; rgba[i*4+1] = g; rgba[i*4+2] = b; rgba[i*4+3] = 255;
         }
-        rgba[i*4] = r; rgba[i*4+1] = g; rgba[i*4+2] = b; rgba[i*4+3] = 255;
+        const layout = applyPrintLayout(rgba, w, h, metaOut);
+        png = await encodeRGBA8(layout.width, layout.height, layout.rgba, metaOut);
+      } else {
+        png = await encodeIndexed8(w, h, pixels, palette, metaOut);
       }
-      const layout = applyPrintLayout(rgba, w, h, metaOut);
-      png = await encodeRGBA8(layout.width, layout.height, layout.rgba, metaOut);
     }
 
     const blob = new Blob([png], {type: 'image/png'});
