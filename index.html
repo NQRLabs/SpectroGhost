@@ -2192,39 +2192,22 @@ SOFTWARE.</pre>
     return buf;
   }
   
-  function _zlibStore(data){
-    const bsize=65535;
-    const blocks=[];
-    let i=0;
-    while(i<data.length){
-      const chunk=data.subarray(i, Math.min(i+bsize, data.length));
-      const isLast=(i+chunk.length>=data.length)?1:0;
-      const hdr=new Uint8Array(5);
-      hdr[0]=(isLast<<0)|(0<<1);
-      hdr[1]=chunk.length&0xff;
-      hdr[2]=(chunk.length>>>8)&0xff;
-      hdr[3]=(~chunk.length)&0xff;
-      hdr[4]=((~chunk.length)>>>8)&0xff;
-      blocks.push(hdr,chunk);
-      i+=chunk.length;
+  async function _zlibDeflate(data){
+    const cs = new CompressionStream('deflate');
+    const writer = cs.writable.getWriter();
+    writer.write(data);
+    writer.close();
+    const chunks = [];
+    const reader = cs.readable.getReader();
+    while(true){
+      const { done, value } = await reader.read();
+      if(done) break;
+      chunks.push(value);
     }
-    const adler=_adler32(data);
-    const header=new Uint8Array([0x78,0x01]);
-    const footer=new Uint8Array(4);
-    new DataView(footer.buffer).setUint32(0,adler);
-    return _concat([header,...blocks,footer]);
+    return _concat(chunks);
   }
-  
-  function _adler32(data){
-    let a=1,b=0;
-    for(let i=0;i<data.length;i++){
-      a=(a+data[i])%65521;
-      b=(b+a)%65521;
-    }
-    return (b<<16)|a;
-  }
-  
-  function encodeRGBA8(w, h, rgba, meta){
+
+  async function encodeRGBA8(w, h, rgba, meta){
     const sig = new Uint8Array([137,80,78,71,13,10,26,10]);
   
     const ihdr = new Uint8Array(13);
@@ -2249,20 +2232,73 @@ SOFTWARE.</pre>
       }
     }
   
-    // Each row: filter byte then RGBA data
-    const scan = new Uint8Array(h * (1 + w*4));
-    let si = 0, di = 0;
+    // Each row: filter byte (Sub=1) then filtered RGBA data.
+    // Sub filter stores horizontal deltas, which compresses much better than raw.
+    const bpp = 4; // bytes per pixel (RGBA)
+    const scan = new Uint8Array(h * (1 + w * bpp));
+    let di = 0;
     for(let y = 0; y < h; y++){
-      scan[di++] = 0;
-      for(let x = 0; x < w*4; x++){
-        scan[di++] = rgba[si++];
+      scan[di++] = 1; // Sub filter
+      const rowOff = y * w * bpp;
+      for(let x = 0; x < w * bpp; x++){
+        const raw = rgba[rowOff + x];
+        const left = x >= bpp ? rgba[rowOff + x - bpp] : 0;
+        scan[di++] = (raw - left) & 0xff;
       }
     }
-  
-    const z = _zlibStore(scan);
+
+    const z = await _zlibDeflate(scan);
     chunks.push(_chunk(new Uint8Array([73,68,65,84]), z)); // IDAT
     chunks.push(_chunk(new Uint8Array([73,69,78,68]), null)); // IEND
-  
+
+    return _concat(chunks);
+  }
+
+  // PNG color type 3 (indexed/palette): 1 byte per pixel.
+  // palette: Uint8Array of 256*3 RGB bytes (no alpha).
+  // pixels:  Uint8Array of w*h palette indices.
+  async function encodeIndexed8(w, h, pixels, palette, meta){
+    const sig = new Uint8Array([137,80,78,71,13,10,26,10]);
+
+    const ihdr = new Uint8Array(13);
+    const dv = new DataView(ihdr.buffer);
+    dv.setUint32(0, w);
+    dv.setUint32(4, h);
+    ihdr[8] = 8;  // 8-bit depth
+    ihdr[9] = 3;  // color type 3 = indexed
+    ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+
+    const chunks = [
+      sig,
+      _chunk(new Uint8Array([73,72,68,82]), ihdr)  // IHDR
+    ];
+
+    if(meta){
+      for(const k in meta){
+        const text = new TextEncoder().encode(k + "\x00" + meta[k]);
+        chunks.push(_chunk(new Uint8Array([116,69,88,116]), text)); // tEXt
+      }
+    }
+
+    chunks.push(_chunk(new Uint8Array([80,76,84,69]), palette)); // PLTE
+
+    // Each row: Sub filter (type 1) + 1 byte per pixel
+    const scan = new Uint8Array(h * (1 + w));
+    let di = 0;
+    for(let y = 0; y < h; y++){
+      scan[di++] = 1; // Sub filter
+      const rowOff = y * w;
+      for(let x = 0; x < w; x++){
+        const raw = pixels[rowOff + x];
+        const left = x > 0 ? pixels[rowOff + x - 1] : 0;
+        scan[di++] = (raw - left) & 0xff;
+      }
+    }
+
+    const z = await _zlibDeflate(scan);
+    chunks.push(_chunk(new Uint8Array([73,68,65,84]), z)); // IDAT
+    chunks.push(_chunk(new Uint8Array([73,69,78,68]), null)); // IEND
+
     return _concat(chunks);
   }
 
@@ -2340,7 +2376,7 @@ SOFTWARE.</pre>
 
   // Export button handler
   if(els.btnDownload){
-    els.btnDownload.addEventListener('click', ()=>{
+    els.btnDownload.addEventListener('click', async ()=>{
       if(!offscreen) return;
       const w = offscreen.w, h = offscreen.h;
       
@@ -2348,32 +2384,14 @@ SOFTWARE.</pre>
       if (!(w > 0 && h > 0)) return;
       
       const invNow = !(document.getElementById('invertColors')?.checked);
-      
-      // Build RGBA pixel buffer using the colormap LUT (matches preview)
       const applySRGBExp = !!(document.getElementById('srgbGamma')?.checked);
-      const rgba = new Uint8ClampedArray(offscreen.gray8.length * 4);
-      for (let i = 0; i < offscreen.gray8.length; i++) {
-        const v = offscreen.gray8[i];
-        const lutIdx = (invNow ? (255 - v) : v) * 4;
-        let r = LUT[lutIdx+0], g = LUT[lutIdx+1], b = LUT[lutIdx+2];
-        if(applySRGBExp){
-          r = Math.round(linearToSRGB(r/255)*255);
-          g = Math.round(linearToSRGB(g/255)*255);
-          b = Math.round(linearToSRGB(b/255)*255);
-        }
-        rgba[i*4+0] = r;
-        rgba[i*4+1] = g;
-        rgba[i*4+2] = b;
-        rgba[i*4+3] = 255;
-      }
-      
+      const addBorder = !!(document.getElementById('printBorder')?.checked);
+      const addInfo = !!(document.getElementById('printInfo')?.checked);
+
       // Calculate hop using same formula as rendering
       const fftSizeVal = Number(els.fftSize.value) || 2048;
       const overlapPctVal = Number(els.overlapPercent?.value) || 75;
       const hopVal = Math.max(1, Math.round(fftSizeVal * (1 - overlapPctVal / 100)));
-
-      const addBorder = !!(document.getElementById('printBorder')?.checked);
-      const addInfo = !!(document.getElementById('printInfo')?.checked);
 
       const metaOut = {
         colormap: String(els.colormap?.value || 'grayscale'),
@@ -2400,8 +2418,43 @@ SOFTWARE.</pre>
         printInfoHeight: String(addInfo ? PRINT_INFO_HEIGHT : 0)
       };
 
-      const layout = applyPrintLayout(rgba, w, h, metaOut);
-      const png = encodeRGBA8(layout.width, layout.height, layout.rgba, metaOut);
+      let png;
+      if(!addBorder && !addInfo){
+        // PNG8 (indexed): 1 byte/pixel — ~4x smaller than RGBA
+        const palette = new Uint8Array(256 * 3);
+        for(let i = 0; i < 256; i++){
+          let r = LUT[i*4], g = LUT[i*4+1], b = LUT[i*4+2];
+          if(applySRGBExp){
+            r = Math.round(linearToSRGB(r/255)*255);
+            g = Math.round(linearToSRGB(g/255)*255);
+            b = Math.round(linearToSRGB(b/255)*255);
+          }
+          palette[i*3] = r; palette[i*3+1] = g; palette[i*3+2] = b;
+        }
+        const gray8 = offscreen.gray8;
+        const pixels = new Uint8Array(w * h);
+        for(let i = 0; i < gray8.length; i++){
+          pixels[i] = invNow ? (255 - gray8[i]) : gray8[i];
+        }
+        png = await encodeIndexed8(w, h, pixels, palette, metaOut);
+      } else {
+        // Print layout needs RGBA for canvas-based text rendering
+        const rgba = new Uint8ClampedArray(offscreen.gray8.length * 4);
+        for(let i = 0; i < offscreen.gray8.length; i++){
+          const v = offscreen.gray8[i];
+          const lutIdx = (invNow ? (255 - v) : v) * 4;
+          let r = LUT[lutIdx+0], g = LUT[lutIdx+1], b = LUT[lutIdx+2];
+          if(applySRGBExp){
+            r = Math.round(linearToSRGB(r/255)*255);
+            g = Math.round(linearToSRGB(g/255)*255);
+            b = Math.round(linearToSRGB(b/255)*255);
+          }
+          rgba[i*4+0] = r; rgba[i*4+1] = g; rgba[i*4+2] = b; rgba[i*4+3] = 255;
+        }
+        const layout = applyPrintLayout(rgba, w, h, metaOut);
+        png = await encodeRGBA8(layout.width, layout.height, layout.rgba, metaOut);
+      }
+
       const blob = new Blob([png], {type:'image/png'});
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -2409,7 +2462,7 @@ SOFTWARE.</pre>
       a.href = url;
       a.click();
       setTimeout(()=>URL.revokeObjectURL(url), 2000);
-      
+
       els.status.textContent = `Exported: PNG with metadata`;
     });
   }
@@ -2417,34 +2470,16 @@ SOFTWARE.</pre>
   /* ============================================
      COPY TO CLIPBOARD
      ============================================ */
-  function copySpectrogramToClipboard(){
+  async function copySpectrogramToClipboard(){
     if(!offscreen || !offscreen.gray8) return;
     const w = offscreen.w, h = offscreen.h;
     if(!(w > 0 && h > 0)) return;
 
     const invNow = !(document.getElementById('invertColors')?.checked);
-
-    // Build RGBA pixel buffer using the colormap LUT (same as export)
     const applySRGBClip = !!(document.getElementById('srgbGamma')?.checked);
-    const rgba = new Uint8ClampedArray(offscreen.gray8.length * 4);
-    for(let i = 0; i < offscreen.gray8.length; i++){
-      const v = offscreen.gray8[i];
-      const lutIdx = (invNow ? (255 - v) : v) * 4;
-      let r = LUT[lutIdx], g = LUT[lutIdx+1], b = LUT[lutIdx+2];
-      if(applySRGBClip){
-        r = Math.round(linearToSRGB(r/255)*255);
-        g = Math.round(linearToSRGB(g/255)*255);
-        b = Math.round(linearToSRGB(b/255)*255);
-      }
-      rgba[i*4]   = r;
-      rgba[i*4+1] = g;
-      rgba[i*4+2] = b;
-      rgba[i*4+3] = 255;
-    }
-
-    // Build metadata (same as export)
     const addBorderClip = !!(document.getElementById('printBorder')?.checked);
     const addInfoClip = !!(document.getElementById('printInfo')?.checked);
+
     const fftSizeVal = Number(els.fftSize.value) || 2048;
     const overlapPctVal = Number(els.overlapPercent?.value) || 75;
     const hopVal = Math.max(1, Math.round(fftSizeVal * (1 - overlapPctVal / 100)));
@@ -2473,8 +2508,43 @@ SOFTWARE.</pre>
       printInfoHeight: String(addInfoClip ? PRINT_INFO_HEIGHT : 0)
     };
 
-    const layout = applyPrintLayout(rgba, w, h, metaOut);
-    const png = encodeRGBA8(layout.width, layout.height, layout.rgba, metaOut);
+    let png;
+    if(!addBorderClip && !addInfoClip){
+      // PNG8 (indexed): 1 byte/pixel — ~4x smaller than RGBA
+      const palette = new Uint8Array(256 * 3);
+      for(let i = 0; i < 256; i++){
+        let r = LUT[i*4], g = LUT[i*4+1], b = LUT[i*4+2];
+        if(applySRGBClip){
+          r = Math.round(linearToSRGB(r/255)*255);
+          g = Math.round(linearToSRGB(g/255)*255);
+          b = Math.round(linearToSRGB(b/255)*255);
+        }
+        palette[i*3] = r; palette[i*3+1] = g; palette[i*3+2] = b;
+      }
+      const gray8 = offscreen.gray8;
+      const pixels = new Uint8Array(w * h);
+      for(let i = 0; i < gray8.length; i++){
+        pixels[i] = invNow ? (255 - gray8[i]) : gray8[i];
+      }
+      png = await encodeIndexed8(w, h, pixels, palette, metaOut);
+    } else {
+      // Print layout needs RGBA for canvas-based text rendering
+      const rgba = new Uint8ClampedArray(offscreen.gray8.length * 4);
+      for(let i = 0; i < offscreen.gray8.length; i++){
+        const v = offscreen.gray8[i];
+        const lutIdx = (invNow ? (255 - v) : v) * 4;
+        let r = LUT[lutIdx], g = LUT[lutIdx+1], b = LUT[lutIdx+2];
+        if(applySRGBClip){
+          r = Math.round(linearToSRGB(r/255)*255);
+          g = Math.round(linearToSRGB(g/255)*255);
+          b = Math.round(linearToSRGB(b/255)*255);
+        }
+        rgba[i*4] = r; rgba[i*4+1] = g; rgba[i*4+2] = b; rgba[i*4+3] = 255;
+      }
+      const layout = applyPrintLayout(rgba, w, h, metaOut);
+      png = await encodeRGBA8(layout.width, layout.height, layout.rgba, metaOut);
+    }
+
     const blob = new Blob([png], {type: 'image/png'});
     navigator.clipboard.write([
       new ClipboardItem({ 'image/png': blob })
